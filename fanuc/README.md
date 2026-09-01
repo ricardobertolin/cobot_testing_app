@@ -13,6 +13,8 @@ sozinho se a ferramenta encostar.
 | `modelo_fanuc.py` | Cinemática por produto de exponenciais e as malhas do CAD. Roda sozinho como autoteste das cotas. |
 | `pendant_fanuc.py` | Simulador da tela do iPendant, com as seis juntas, jog em JOINT / WORLD / TOOL, override e os LEDs de estado. |
 | `twin3d_fanuc.py` | Digital twin: o robô do CAD desenhado na pose, ao vivo. |
+| `servidor_fanuc.py` | As duas telas acima servidas no navegador, para abrir no iPad. |
+| `web/` | As páginas: `pendant.html` e `twin.html`. Sem framework e sem CDN. |
 
 ## Ethernet
 
@@ -111,6 +113,45 @@ O pendant publica a pose das juntas em UDP na `127.0.0.1:47101` e o twin
 desenha. É tudo local, não sai da máquina, e o robô real não é tocado: o
 R-30iA não tem interface aberta de jog nem de stream de posição.
 
+## No navegador
+
+As mesmas duas telas, sem instalar nada no cliente:
+
+```
+python servidor_fanuc.py
+```
+
+Ele imprime o endereço da máquina na rede. No iPad, no mesmo Wi-Fi:
+
+```
+http://<ip-do-pc>:8081/pendant
+http://<ip-do-pc>:8081/twin
+```
+
+No Safari, Compartilhar → Adicionar à Tela de Início, e abre em tela cheia
+com ícone próprio.
+
+É a arquitetura do `interface_ipad.md` construída. O navegador é cliente
+burro: não tem cinemática nenhuma, o servidor manda as sete transformações
+já calculadas e a página só multiplica matriz e desenha. O 3D é WebGL2 puro,
+sem three.js, porque a página precisa abrir numa rede de célula sem
+internet. O estado desce por Server-Sent Events e os toques de jog sobem por
+POST.
+
+Duas coisas que valem saber:
+
+O jog do navegador é tecla presa, não clique. A página renova o pedido a cada
+200 ms e o servidor derruba o movimento se parar de receber. Página fechada
+ou Wi-Fi caído no meio de um toque não deixam a junta girando sozinha.
+
+O servidor também publica a pose em UDP, então o `twin3d_fanuc.py` de desktop
+segue a tela do navegador sem configuração. Só não abra o `pendant_fanuc.py`
+de desktop junto, porque os dois publicam na mesma porta e brigam.
+
+Nada disso chega no controlador. Continua valendo o que está no
+`interface_ipad.md`: o iPad prepara, transfere e monitora, e uma pessoa
+aperta o botão verde.
+
 ## O CAD
 
 O twin lê as peças em `.obj` de
@@ -146,3 +187,8 @@ antebraço mantém a inclinação no espaço. Numa cadeia serial isso vira uma
 soma, e o ângulo que entra no modelo é `J3 + J2`. Está em
 `ACOPLAMENTO_J23`, no `modelo_fanuc.py`, e o autoteste verifica que jogar J2
 sozinho não gira o antebraço.
+
+## Créditos
+
+- **Ricardo Bertolin**
+- **Diego Simões Barreto** — coautor do projeto e colaboração no laboratório

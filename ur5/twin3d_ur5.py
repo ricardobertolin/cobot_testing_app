@@ -42,6 +42,10 @@ import modelo_ur5 as mod
 PORTA_PENDANT = 47100
 
 PERIODO_TELA = 33      # ms entre redesenhos
+
+# Pose de partida, a mesma do pendant_ur5.py. So aparece ate chegar o
+# primeiro dado da fonte escolhida.
+POSE_INICIAL = [math.radians(v) for v in (0.0, -60.0, 90.0, -120.0, -90.0, 0.0)]
 PONTOS_RASTRO = 400    # tamanho maximo do rastro do TCP
 
 
@@ -65,7 +69,7 @@ class FontePendant:
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(("127.0.0.1", porta))
         self.sock.setblocking(False)
-        self.q = [0.0, -math.pi / 2, 0.0, -math.pi / 2, 0.0, 0.0]
+        self.q = list(POSE_INICIAL)
         self.recebeu = False
 
     def ler(self):
@@ -105,7 +109,7 @@ class FonteRobo:
 
         self.ur = ur
         self.ip = ip or ur.UR_IP
-        self.q = [0.0, -math.pi / 2, 0.0, -math.pi / 2, 0.0, 0.0]
+        self.q = list(POSE_INICIAL)
         self.mensagem = "conectando"
         self.parar = False
         self.thread = threading.Thread(target=self._laco, daemon=True)
@@ -164,7 +168,7 @@ class FonteSliders:
     nome = "sliders"
 
     def __init__(self):
-        self.q = [0.0, -math.pi / 2, 0.0, -math.pi / 2, 0.0, 0.0]
+        self.q = list(POSE_INICIAL)
 
     def ler(self):
         return self.q

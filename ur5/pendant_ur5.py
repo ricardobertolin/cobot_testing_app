@@ -69,6 +69,18 @@ POSES = {
     "Trabalho": [0.0, -60.0, 90.0, -120.0, -90.0, 0.0],
 }
 
+# A tela nasce numa pose de trabalho, e nao na vertical.
+#
+# A vertical tem o cotovelo esticado E o punho alinhado ao mesmo tempo, o
+# que zera TRES valores singulares do jacobiano. Ali o jog cartesiano
+# realmente nao anda, e por motivo legitimo: braco esticado nao tem como se
+# mover na direcao do proprio braco, a velocidade e nula em primeira ordem.
+# So que quem abre a tela e aperta a seta de Z conclui que o programa
+# quebrou. Comecar fora da singularidade evita esse mal-entendido sem
+# mentir sobre a fisica, e a pose Vertical continua a um botao de
+# distancia.
+POSE_INICIAL = [math.radians(v) for v in POSES["Trabalho"]]
+
 # Paleta do PolyScope: cinza claro, azul de cabecalho, botao levemente azulado.
 FUNDO = "#e9e9e9"
 BARRA = "#2f6ba3"
@@ -76,6 +88,55 @@ TELA = "#ffffff"
 BOTAO = "#d3d8dd"
 BOTAO_ATIVO = "#a8c4de"
 TEXTO_FRACO = "#5a5a5a"
+
+
+# ============================================================
+# JOG
+# ============================================================
+
+def aplicar_jog(q, eixo, sinal, fracao, recurso, dt):
+    """
+    Um passo de jog. Devolve (nova_pose, aviso), com aviso None quando deu
+    certo e a pose inalterada quando nao deu.
+
+        eixo    0..5 juntas, 6..11 as direcoes cartesianas X Y Z RX RY RZ
+        sinal   +1 ou -1
+        fracao  0..1, a velocidade da tela
+        recurso "Base" ou "Tool", so vale para o cartesiano
+
+    Esta funcao existe fora da janela de proposito: o servidor_ur5.py, que
+    serve a versao browser, usa exatamente a mesma. Jog em dois lugares com
+    duas contas diferentes seria um jeito garantido de a tela e o twin
+    discordarem.
+    """
+    if eixo < 6:
+        novo = list(q)
+        novo[eixo] += sinal * VELOCIDADE_JOG_JUNTA * fracao * dt
+    else:
+        direcao = eixo - 6
+        linear = np.zeros(3)
+        angular = np.zeros(3)
+        if direcao < 3:
+            linear[direcao] = sinal * VELOCIDADE_JOG_LINEAR * fracao
+        else:
+            angular[direcao - 3] = sinal * VELOCIDADE_JOG_ANGULAR * fracao
+
+        if recurso == "Tool":
+            # As direcoes vem no frame da ferramenta e precisam ir para a
+            # base, que e onde o jacobiano trabalha.
+            R = mod.transformadas(q)[6][0] @ mod.FLANGE_R
+            linear = R @ linear
+            angular = R @ angular
+
+        novo = mod.passo_cartesiano(q, linear, angular, dt)
+
+    estouro = [i for i, v in enumerate(novo) if abs(v) > mod.LIMITE_JUNTA]
+    if estouro:
+        return list(q), (f"J{estouro[0] + 1} chegou em "
+                         f"{math.degrees(novo[estouro[0]]):.0f} graus, "
+                         f"o limite e +/- 360")
+
+    return novo, None
 
 
 class Espelho:
@@ -121,7 +182,7 @@ class Pendant(tk.Tk):
         self.configure(bg=FUNDO)
         self.resizable(False, False)
 
-        self.q = [0.0, -math.pi / 2, 0.0, -math.pi / 2, 0.0, 0.0]
+        self.q = list(POSE_INICIAL)
         self.espelho = espelho
         self.recurso = tk.StringVar(value="Base")
         self.velocidade = tk.DoubleVar(value=30.0)
@@ -304,34 +365,11 @@ class Pendant(tk.Tk):
 
     def _mover(self, dt):
         eixo, sinal = self.jog
-        fracao = self.velocidade.get() / 100.0
-
-        if eixo < 6:
-            novo = list(self.q)
-            novo[eixo] += sinal * VELOCIDADE_JOG_JUNTA * fracao * dt
-        else:
-            direcao = eixo - 6
-            linear = np.zeros(3)
-            angular = np.zeros(3)
-            if direcao < 3:
-                linear[direcao] = sinal * VELOCIDADE_JOG_LINEAR * fracao
-            else:
-                angular[direcao - 3] = sinal * VELOCIDADE_JOG_ANGULAR * fracao
-
-            if self.recurso.get() == "Tool":
-                # As direcoes vem no frame da ferramenta e precisam ir para a
-                # base, que e onde o jacobiano trabalha.
-                R = mod.transformadas(self.q)[6][0] @ mod.FLANGE_R
-                linear = R @ linear
-                angular = R @ angular
-
-            novo = mod.passo_cartesiano(self.q, linear, angular, dt)
-
-        estouro = [i for i, v in enumerate(novo) if abs(v) > mod.LIMITE_JUNTA]
-        if estouro:
-            self._avisar(f"J{estouro[0] + 1} chegou em "
-                         f"{math.degrees(novo[estouro[0]]):.0f} graus, "
-                         f"o limite e +/- 360")
+        novo, aviso = aplicar_jog(self.q, eixo, sinal,
+                                  self.velocidade.get() / 100.0,
+                                  self.recurso.get(), dt)
+        if aviso:
+            self._avisar(aviso)
             self._parar_jog()
             return
 

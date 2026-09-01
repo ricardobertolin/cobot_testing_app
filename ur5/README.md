@@ -17,6 +17,8 @@ sai da interface real-time.
 | `modelo_ur5.py` | Cinemática por produto de exponenciais e as malhas do CAD. Roda sozinho como autoteste. |
 | `pendant_ur5.py` | Simulador da tela Move do PolyScope, com as seis juntas e o jog cartesiano. Só lê o robô, nunca escreve. |
 | `twin3d_ur5.py` | Digital twin: o robô do CAD desenhado na pose, ao vivo. |
+| `servidor_ur5.py` | As duas telas acima servidas no navegador, para abrir no iPad. |
+| `web/` | As páginas: `pendant.html` e `twin.html`. Sem framework e sem CDN. |
 | `originais/` | As três versões originais, antes das correções. Ficam de referência. |
 
 ## Ethernet
@@ -104,6 +106,50 @@ movimento:
 python pendant_ur5.py --espelhar 10.26.10.20
 ```
 
+## No navegador
+
+As mesmas duas telas, sem instalar nada no cliente:
+
+```
+python servidor_ur5.py
+```
+
+Ele imprime o endereço da máquina na rede. No iPad, no mesmo Wi-Fi:
+
+```
+http://<ip-do-pc>:8080/pendant
+http://<ip-do-pc>:8080/twin
+```
+
+No Safari, Compartilhar → Adicionar à Tela de Início, e abre em tela cheia
+com ícone próprio.
+
+É a arquitetura do `interface_ipad.md` construída. O navegador é cliente
+burro: não tem cinemática nenhuma, o servidor manda as sete transformações
+já calculadas e a página só multiplica matriz e desenha. O 3D é WebGL2 puro,
+sem three.js, porque a página precisa abrir numa rede de célula sem
+internet. O estado desce por Server-Sent Events e os toques de jog sobem por
+POST.
+
+Duas coisas que valem saber:
+
+O jog do navegador é tecla presa, não clique. A página renova o pedido a cada
+200 ms e o servidor derruba o movimento se parar de receber. Página fechada
+ou Wi-Fi caído no meio de um toque não deixam a junta girando sozinha.
+
+O servidor também publica a pose em UDP, então o `twin3d_ur5.py` de desktop
+segue a tela do navegador sem configuração. Só não abra o `pendant_ur5.py` de
+desktop junto, porque os dois publicam na mesma porta e brigam.
+
+Para espelhar o robô real na página, com jog desabilitado:
+
+```
+python servidor_ur5.py --espelhar 10.26.10.20
+```
+
+O servidor escuta em todas as interfaces. É simulador e não comanda robô,
+mas se a rede não for isolada, `--host 127.0.0.1` limita à própria máquina.
+
 ## O CAD
 
 O twin lê as peças em `.obj` de
@@ -126,3 +172,8 @@ python modelo_ur5.py
 
 Ele compara a cadeia usada pelo twin com a cinemática direta por DH do
 `ur5_comum.py`, que veio de outra fonte. As duas fecham em 1e-16 m.
+
+## Créditos
+
+- **Ricardo Bertolin**
+- **Diego Simões Barreto** — coautor do projeto e colaboração no laboratório

@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Pendant</title>
+<!--
+  Tela de operacao no navegador.
+
+  Esta pagina nao sabe cinematica nenhuma. Ela pede /config.json para
+  descobrir como o robo se chama, quantas casas decimais mostrar e quais
+  botoes existem, e depois so escuta /estado e imprime numero. Todo o
+  calculo fica no Python. E de proposito: mesma conta em dois lugares e a
+  receita para a tela e o robo discordarem.
+
+  O mesmo arquivo serve o UR5 e o FANUC. O que muda vem do config.
+-->
+<style>
+:root{
+  --fundo:#e9e9e9; --painel:#f4f4f4; --barra:#2f6ba3; --barra-ativa:#4d8bc4;
+  --tela:#fff; --tecla:#d3d8dd; --tecla-ativa:#a8c4de; --texto:#141414;
+  --fraco:#5a5a5a; --borda:#bcbcbc; --alerta:#8a1f1f;
+}
+body.fanuc{
+  --fundo:#c9c6b8; --painel:#d3d0c2; --barra:#1f3448; --barra-ativa:#2d4d68;
+  --tela:#f2f2ec; --tecla:#b9b5a6; --tecla-ativa:#8ea9c0; --texto:#141414;
+  --fraco:#4a4a4a; --borda:#8d8a7d; --alerta:#8a1f1f;
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  background:var(--fundo); color:var(--texto);
+  font:15px/1.4 -apple-system,"Segoe UI",system-ui,sans-serif;
+  display:flex; flex-direction:column;
+  touch-action:manipulation;         /* mata o zoom de toque duplo */
+  -webkit-text-size-adjust:100%;
+  user-select:none; -webkit-user-select:none;
+}
+.mono{font-family:"SF Mono",Consolas,ui-monospace,monospace;font-variant-numeric:tabular-nums}
+
+/* ---------- barra ---------- */
+header{background:var(--barra);color:#fff;display:flex;align-items:stretch;flex-wrap:wrap}
+header .abas{display:flex}
+header .aba{padding:.7rem 1.1rem;font-size:.9rem;opacity:.7}
+header .aba.ativa{background:var(--barra-ativa);opacity:1}
+header .titulo{padding:.7rem 1.1rem;font-weight:600}
+header .direita{margin-left:auto;display:flex;align-items:center;gap:1rem;padding:0 1rem}
+header .estado{font-size:.85rem;opacity:.9}
+header a{color:#fff;text-decoration:none;border:1px solid rgba(255,255,255,.45);
+  padding:.3rem .7rem;border-radius:4px;font-size:.85rem}
+
+#leds{display:flex;background:#141414;gap:2px;padding:2px}
+#leds span{flex:1;text-align:center;padding:.3rem 0;font-size:.72rem;
+  letter-spacing:.05em;color:#3a3a3a;font-family:Consolas,monospace}
+#leds span.on{color:#57e06a}
+#leds span.on[data-n=FAULT]{color:#ff4b4b}
+#leds span.on[data-n=HOLD]{color:#ffd24b}
+
+/* ---------- corpo ---------- */
+main{flex:1;display:grid;grid-template-columns:minmax(280px,1fr) minmax(320px,26rem);
+  gap:.9rem;padding:.9rem;overflow:auto;align-content:start}
+/* Modo "duplo" tem doze linhas de jog, seis de junta e seis de cartesiano.
+   Empilhadas elas nao cabem na altura de um iPad deitado, entao viram duas
+   colunas e o painel ganha largura. */
+body.duplo main{grid-template-columns:minmax(240px,1fr) minmax(400px,39rem)}
+body.duplo #teclas{display:grid;grid-template-columns:1fr 1fr;gap:0 1.1rem}
+body.duplo #teclas .linha{margin:.2rem 0}
+/* Na linha de jog o campo nao cresce: se crescer, empurra as setas para
+   fora do painel e elas somem no recorte do main. */
+#teclas .valor{flex:none;width:5rem;font-size:1rem}
+#teclas .rotulo{width:4.6rem}
+#teclas .unidade{display:none}
+#teclas .tecla{min-width:3.2rem}
+@media (max-width:900px){
+  main,body.duplo main{grid-template-columns:1fr}
+  body.duplo #teclas{grid-template-columns:1fr}
+}
+
+section{background:var(--painel);border:1px solid var(--borda);border-radius:6px;padding:.7rem .9rem}
+h2{margin:0 0 .5rem;font-size:.82rem;letter-spacing:.08em;text-transform:uppercase;color:var(--fraco)}
+
+.linha{display:flex;align-items:center;gap:.5rem;margin:.35rem 0}
+.rotulo{width:6.5rem;flex:none;font-size:.9rem}
+.valor{flex:1;text-align:right;background:var(--tela);border:1px solid var(--borda);
+  border-radius:4px;padding:.35rem .6rem;font-size:1.15rem}
+.unidade{width:2.6rem;flex:none;font-size:.8rem;color:var(--fraco)}
+
+/* ---------- teclas ---------- */
+.tecla{
+  background:var(--tecla);border:1px solid var(--borda);border-radius:6px;
+  color:var(--texto);font-size:1.25rem;line-height:1;
+  min-width:3.4rem;min-height:3.1rem;                /* alvo de dedo */
+  touch-action:none;                                  /* o dedo nao rola a pagina */
+  cursor:pointer;
+}
+.tecla:active,.tecla.presa{background:var(--tecla-ativa)}
+.opcao{background:var(--tecla);border:1px solid var(--borda);border-radius:6px;
+  padding:.55rem .9rem;font-size:.85rem;cursor:pointer;min-height:2.6rem}
+.opcao.ativa{background:var(--tecla-ativa);font-weight:600}
+.grupo{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.7rem;align-items:center}
+.grupo .rotulo{width:auto;color:var(--fraco);font-size:.8rem;letter-spacing:.05em}
+input[type=range]{flex:1;min-width:8rem}
+
+footer{background:var(--painel);border-top:1px solid var(--borda);
+  padding:.55rem .9rem;font-size:.85rem;display:flex;gap:1rem;align-items:center}
+#mensagem{flex:1}
+#mensagem.alerta{color:var(--alerta);font-weight:600}
+#creditos{color:var(--fraco);font-size:.78rem;text-align:right}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="abas" id="abas"></div>
+  <div class="titulo" id="titulo"></div>
+  <div class="direita">
+    <span class="estado" id="estado"></span>
+    <a href="/twin">twin 3D</a>
+  </div>
+</header>
+<div id="leds"></div>
+
+<main>
+  <div>
+    <section>
+      <h2 id="titulo-juntas"></h2>
+      <div id="leitura-juntas"></div>
+    </section>
+    <section style="margin-top:.9rem">
+      <h2 id="titulo-cartesiano"></h2>
+      <div id="leitura-cartesiano"></div>
+    </section>
+  </div>
+
+  <section>
+    <h2>Jog</h2>
+    <div class="grupo" id="coordenadas"></div>
+    <div id="teclas"></div>
+    <div class="grupo" id="velocidade" style="margin-top:.9rem"></div>
+    <div class="grupo" id="poses"></div>
+  </section>
+</main>
+
+<footer>
+  <span id="mensagem"></span>
+  <span id="creditos"></span>
+</footer>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+let cfg = null;
+let ultimo = null;
+
+// Pedido de jog renovado a cada 200 ms enquanto a tecla esta presa. O
+// servidor derruba o jog se parar de receber, entao pagina fechada ou
+// Wi-Fi caido nao deixam a junta girando sozinha.
+const RENOVACAO = 200;
+let repetidor = null;
+
+async function comandar(corpo){
+  try{
+    await fetch("/comando", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(corpo),
+    });
+  }catch(e){ /* servidor caiu: o SSE ja vai acusar */ }
+}
+
+function iniciarJog(eixo, sinal, botao){
+  pararJog();
+  botao.classList.add("presa");
+  const enviar = () => comandar({acao:"jog", eixo, sinal});
+  enviar();
+  repetidor = setInterval(enviar, RENOVACAO);
+}
+
+function pararJog(){
+  if(repetidor !== null){ clearInterval(repetidor); repetidor = null; }
+  document.querySelectorAll(".tecla.presa").forEach(b => b.classList.remove("presa"));
+  comandar({acao:"parar"});
+}
+
+function tecla(texto, eixo, sinal){
+  const b = document.createElement("button");
+  b.className = "tecla";
+  b.textContent = texto;
+  // Pointer Events cobrem dedo, caneta e mouse com o mesmo codigo. O
+  // setPointerCapture garante o evento de soltar mesmo se o dedo escorregar
+  // para fora da tecla, que e o caso em que o jog ficaria preso.
+  b.addEventListener("pointerdown", (ev) => {
+    ev.preventDefault();
+    b.setPointerCapture(ev.pointerId);
+    iniciarJog(eixo, sinal, b);
+  });
+  for(const evento of ["pointerup","pointercancel","lostpointercapture"]){
+    b.addEventListener(evento, pararJog);
+  }
+  return b;
+}
+
+function linha(rotulo, unidade, teclas){
+  const div = document.createElement("div");
+  div.className = "linha";
+
+  const r = document.createElement("span");
+  r.className = "rotulo";
+  r.textContent = rotulo;
+
+  const v = document.createElement("span");
+  v.className = "valor mono";
+  v.textContent = "0.00";
+
+  const u = document.createElement("span");
+  u.className = "unidade";
+  u.textContent = unidade;
+
+  div.append(r, v, u);
+  for(const t of teclas) div.append(t);
+  return {div, rotulo:r, valor:v, unidade:u};
+}
+
+// ------------------------------------------------------------
+// montagem, toda vinda do config
+// ------------------------------------------------------------
+
+let leiturasJuntas = [], leiturasCartesiano = [], linhasJog = [];
+
+function montar(){
+  document.body.classList.toggle("fanuc", cfg.tema === "fanuc");
+  document.body.classList.toggle("duplo", cfg.jog_modo === "duplo");
+  document.title = cfg.robo + " - pendant";
+  $("titulo").textContent = cfg.robo;
+
+  for(const nome of cfg.abas){
+    const d = document.createElement("div");
+    d.className = "aba" + (nome === cfg.aba_ativa ? " ativa" : "");
+    d.textContent = nome;
+    $("abas").append(d);
+  }
+
+  for(const nome of cfg.leds){
+    const s = document.createElement("span");
+    s.dataset.n = nome;
+    s.textContent = nome;
+    $("leds").append(s);
+  }
+  $("leds").style.display = cfg.leds.length ? "flex" : "none";
+
+  $("titulo-juntas").textContent = cfg.titulo_juntas;
+  $("titulo-cartesiano").textContent = cfg.titulo_cartesiano;
+
+  for(let i = 0; i < 6; i++){
+    const l = linha(cfg.juntas[i], cfg.unidade_junta, []);
+    $("leitura-juntas").append(l.div);
+    leiturasJuntas.push(l);
+  }
+  for(const c of cfg.cartesiano){
+    const l = linha(c.n, c.u, []);
+    $("leitura-cartesiano").append(l.div);
+    leiturasCartesiano.push(l);
+  }
+
+  montarCoordenadas();
+  montarTeclas();
+  montarVelocidade();
+  montarPoses();
+
+  $("creditos").textContent = cfg.creditos.pessoas.join("  ·  ");
+}
+
+function montarCoordenadas(){
+  const c = cfg.coordenadas;
+  if(!c || !c.valores.length) return;
+
+  const r = document.createElement("span");
+  r.className = "rotulo";
+  r.textContent = c.rotulo;
+  $("coordenadas").append(r);
+
+  for(const nome of c.valores){
+    const b = document.createElement("button");
+    b.className = "opcao";
+    b.dataset.coord = nome;
+    b.textContent = nome;
+    b.onclick = () => comandar({
+      acao: cfg.tema === "fanuc" ? "coord" : "recurso", valor: nome});
+    $("coordenadas").append(b);
+  }
+}
+
+function montarTeclas(){
+  // modo "duplo": seis teclas de junta e seis de cartesiano, como no
+  // PolyScope. Modo "unico": seis teclas so, e o que elas movem depende do
+  // COORD, como no iPendant.
+  const grupos = cfg.jog_modo === "duplo"
+    ? [{titulo:"Juntas", base:0, nomes:cfg.juntas.map((n,i)=>n)},
+       {titulo:"Cartesiano", base:6, nomes:cfg.cartesiano.map(c=>c.n)}]
+    : [{titulo:null, base:0, nomes:cfg.juntas.slice()}];
+
+  for(const g of grupos){
+    const coluna = document.createElement("div");
+    if(g.titulo){
+      const h = document.createElement("h2");
+      h.textContent = g.titulo;
+      coluna.append(h);
+    }
+    for(let i = 0; i < 6; i++){
+      const eixo = g.base + i;
+      const l = linha(g.nomes[i], "", [tecla("◀", eixo, -1),
+                                       tecla("▶", eixo, +1)]);
+      coluna.append(l.div);
+      linhasJog.push({linha:l, eixo});
+    }
+    $("teclas").append(coluna);
+  }
+}
+
+function montarVelocidade(){
+  const v = cfg.velocidade;
+  const r = document.createElement("span");
+  r.className = "rotulo";
+  r.textContent = v.rotulo;
+  $("velocidade").append(r);
+
+  if(v.tipo === "slider"){
+    const s = document.createElement("input");
+    s.type = "range"; s.min = v.min; s.max = v.max; s.value = v.valor;
+    const mostra = document.createElement("span");
+    mostra.className = "mono";
+    mostra.textContent = v.valor + "%";
+    s.oninput = () => {
+      mostra.textContent = s.value + "%";
+      comandar({acao:"velocidade", valor:Number(s.value)});
+    };
+    $("velocidade").append(s, mostra);
+  }else{
+    const menos = document.createElement("button");
+    menos.className = "opcao"; menos.textContent = "−%";
+    menos.onclick = () => comandar({acao:"override", passo:-1});
+
+    const mostra = document.createElement("span");
+    mostra.className = "mono"; mostra.id = "rotulo-override";
+    mostra.style.minWidth = "4rem"; mostra.style.textAlign = "center";
+
+    const mais = document.createElement("button");
+    mais.className = "opcao"; mais.textContent = "+%";
+    mais.onclick = () => comandar({acao:"override", passo:+1});
+
+    $("velocidade").append(menos, mostra, mais);
+  }
+}
+
+function montarPoses(){
+  for(const nome of cfg.poses){
+    const b = document.createElement("button");
+    b.className = "opcao";
+    b.textContent = nome;
+    b.onclick = () => comandar({acao:"pose", nome});
+    $("poses").append(b);
+  }
+  if(cfg.reset){
+    const b = document.createElement("button");
+    b.className = "opcao";
+    b.textContent = "RESET";
+    b.style.background = "#d8c27a";
+    b.onclick = () => comandar({acao:"reset"});
+    $("poses").append(b);
+  }
+}
+
+// ------------------------------------------------------------
+// estado que desce
+// ------------------------------------------------------------
+
+function aplicar(e){
+  ultimo = e;
+
+  for(let i = 0; i < 6; i++){
+    leiturasJuntas[i].valor.textContent = e.q[i].toFixed(2);
+  }
+  for(let i = 0; i < 6; i++){
+    leiturasCartesiano[i].valor.textContent = e.pose[i].toFixed(cfg.cartesiano[i].d);
+  }
+
+  // No modo "unico" as teclas mudam de significado com o COORD.
+  const cartesiano = cfg.jog_modo !== "duplo" && e.coord && e.coord !== "JOINT";
+  for(const {linha, eixo} of linhasJog){
+    if(eixo >= 6){
+      linha.valor.textContent = e.pose[eixo - 6].toFixed(cfg.cartesiano[eixo - 6].d);
+    }else if(cartesiano){
+      linha.rotulo.textContent = cfg.cartesiano[eixo].n;
+      linha.valor.textContent = e.pose[eixo].toFixed(cfg.cartesiano[eixo].d);
+    }else{
+      linha.rotulo.textContent = cfg.juntas[eixo];
+      linha.valor.textContent = e.q[eixo].toFixed(2);
+    }
+  }
+
+  const atual = e.coord || e.recurso;
+  document.querySelectorAll("[data-coord]").forEach(b => {
+    b.classList.toggle("ativa", b.dataset.coord === atual);
+  });
+
+  const rotulo = $("rotulo-override");
+  if(rotulo) rotulo.textContent = e.override;
+
+  $("estado").textContent = e.estado;
+  $("mensagem").textContent = e.mensagem;
+  $("mensagem").classList.toggle("alerta", !!e.falha);
+
+  if(e.leds){
+    for(const s of $("leds").children){
+      s.classList.toggle("on", !!e.leds[s.dataset.n]);
+    }
+  }
+}
+
+function escutar(){
+  const es = new EventSource("/estado");
+  es.onmessage = (ev) => aplicar(JSON.parse(ev.data));
+  es.onerror = () => {
+    $("estado").textContent = "sem conexao com o servidor";
+    $("mensagem").textContent = "reconectando...";
+    // O EventSource reconecta sozinho. Nao fechar aqui e o que faz a
+    // pagina voltar sozinha quando o Wi-Fi do iPad oscila.
+  };
+}
+
+// Dedo que sai da tela sem soltar, aba que perde o foco: para o jog.
+for(const evento of ["blur","pagehide"]){
+  window.addEventListener(evento, pararJog);
+}
+document.addEventListener("visibilitychange", () => {
+  if(document.hidden) pararJog();
+});
+
+(async () => {
+  cfg = await (await fetch("/config.json")).json();
+  montar();
+  escutar();
+})();
+</script>
+</body>
+</html>

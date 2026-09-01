@@ -83,6 +83,53 @@ TECLA_ATIVA = "#8ea9c0"
 LED_APAGADO = "#3a3a3a"
 
 
+# ============================================================
+# JOG
+# ============================================================
+
+def aplicar_jog(q, eixo, sinal, fracao, coord, dt):
+    """
+    Um passo de jog. Devolve (nova_pose, aviso), com aviso None quando deu
+    certo e a pose inalterada quando nao deu.
+
+        eixo    0..5, que sao as juntas em JOINT e X Y Z W P R nos outros
+        sinal   +1 ou -1
+        fracao  0..1, o override da tela
+        coord   "JOINT", "WORLD" ou "TOOL"
+
+    Esta funcao existe fora da janela de proposito: o servidor_fanuc.py, que
+    serve a versao browser, usa exatamente a mesma. Jog em dois lugares com
+    duas contas diferentes seria um jeito garantido de a tela e o twin
+    discordarem.
+    """
+    if coord == "JOINT":
+        graus = mod.VELOCIDADES[eixo] * FATOR_JOG_JUNTA * fracao
+        novo = list(q)
+        novo[eixo] += sinal * math.radians(graus) * dt
+    else:
+        linear = np.zeros(3)
+        angular = np.zeros(3)
+        if eixo < 3:
+            linear[eixo] = sinal * VELOCIDADE_JOG_LINEAR * fracao
+        else:
+            angular[eixo - 3] = sinal * VELOCIDADE_JOG_ANGULAR * fracao
+
+        if coord == "TOOL":
+            # As direcoes vem no frame da ferramenta e precisam ir para o
+            # WORLD, que e onde o jacobiano trabalha.
+            R = mod.transformadas(q)[6][0] @ mod.FLANGE_R
+            linear = R @ linear
+            angular = R @ angular
+
+        novo = mod.passo_cartesiano(q, linear, angular, dt)
+
+    problemas = mod.dentro_dos_limites([math.degrees(v) for v in novo])
+    if problemas:
+        return list(q), problemas[0]
+
+    return novo, None
+
+
 class Pendant(tk.Tk):
 
     def __init__(self):
@@ -295,35 +342,13 @@ class Pendant(tk.Tk):
 
     def _mover(self, dt):
         eixo, sinal = self.jog
-        fracao = self.override / 100.0
-
-        if self.coord.get() == "JOINT":
-            graus = mod.VELOCIDADES[eixo] * FATOR_JOG_JUNTA * fracao
-            novo = list(self.q)
-            novo[eixo] += sinal * math.radians(graus) * dt
-        else:
-            linear = np.zeros(3)
-            angular = np.zeros(3)
-            if eixo < 3:
-                linear[eixo] = sinal * VELOCIDADE_JOG_LINEAR * fracao
-            else:
-                angular[eixo - 3] = sinal * VELOCIDADE_JOG_ANGULAR * fracao
-
-            if self.coord.get() == "TOOL":
-                # As direcoes vem no frame da ferramenta e precisam ir para o
-                # WORLD, que e onde o jacobiano trabalha.
-                R = mod.transformadas(self.q)[6][0] @ mod.FLANGE_R
-                linear = R @ linear
-                angular = R @ angular
-
-            novo = mod.passo_cartesiano(self.q, linear, angular, dt)
-
-        problemas = mod.dentro_dos_limites([math.degrees(v) for v in novo])
-        if problemas:
+        novo, aviso = aplicar_jog(self.q, eixo, sinal, self.override / 100.0,
+                                  self.coord.get(), dt)
+        if aviso:
             # No robo real quem barra e o controlador, e o movimento para no
             # limite em vez de recusar. Aqui basta nao aceitar o passo.
             self.falha = True
-            self._avisar(problemas[0])
+            self._avisar(aviso)
             self._parar_jog()
             return
 

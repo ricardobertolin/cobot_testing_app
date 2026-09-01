@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Twin</title>
+<!--
+  Digital twin no navegador, em WebGL2 puro.
+
+  Sem three.js e sem CDN nenhum: a pagina precisa abrir numa rede de celula
+  sem internet. O que sobra de biblioteca 3D sao umas quarenta linhas de
+  matriz, que estao aqui embaixo.
+
+  A pagina tambem nao sabe cinematica. O servidor manda as SETE
+  transformacoes ja prontas, uma por corpo, e aqui elas viram matriz de
+  modelo. Trocar o robo, mudar o acoplamento J2-J3, corrigir uma cota: nada
+  disso mexe neste arquivo.
+
+  A malha vem em binario cru de /malha/N.bin, direto para o buffer da GPU,
+  sem passar por JSON.
+-->
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#0e1013;color:#e8e8e8;
+  font:14px/1.5 -apple-system,"Segoe UI",system-ui,sans-serif;
+  user-select:none;-webkit-user-select:none;-webkit-text-size-adjust:100%}
+canvas{display:block;width:100%;height:100%;touch-action:none}
+#painel{position:fixed;top:0;left:0;padding:.8rem 1rem;background:rgba(12,14,18,.82);
+  border-bottom-right-radius:8px;font-family:"SF Mono",Consolas,ui-monospace,monospace;
+  font-size:12.5px;font-variant-numeric:tabular-nums;pointer-events:none;
+  max-width:min(22rem,60vw)}
+#painel b{color:#8fd0ff;font-weight:600}
+#painel .sec{margin-top:.6rem;color:#7d8590}
+#rodape{position:fixed;bottom:0;left:0;right:0;padding:.5rem 1rem;
+  background:rgba(12,14,18,.82);display:flex;gap:1rem;align-items:center;font-size:12.5px}
+#rodape .dica{color:#7d8590}
+#creditos{margin-left:auto;color:#7d8590;font-size:11.5px;text-align:right}
+a{color:#8fd0ff;text-decoration:none;border:1px solid #33507a;padding:.25rem .6rem;
+  border-radius:4px}
+#carregando{position:fixed;inset:0;display:grid;place-items:center;background:#0e1013;
+  font-size:1rem;color:#8fd0ff}
+</style>
+</head>
+<body>
+
+<canvas id="tela"></canvas>
+<div id="painel"></div>
+<div id="rodape">
+  <a href="/pendant">pendant</a>
+  <span class="dica">arrastar gira · dois dedos ou roda aproxima · duplo toque limpa o rastro</span>
+  <span id="creditos"></span>
+</div>
+<div id="carregando">carregando malhas do CAD...</div>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+const PONTOS_RASTRO = 400;
+
+// ------------------------------------------------------------
+// matrizes, em ordem de coluna, que e o que o WebGL espera
+// ------------------------------------------------------------
+
+function perspectiva(fovy, aspecto, perto, longe){
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (perto - longe);
+  return new Float32Array([
+    f/aspecto,0,0,0,  0,f,0,0,
+    0,0,(longe+perto)*nf,-1,  0,0,2*longe*perto*nf,0]);
+}
+
+function olhar(olho, alvo, cima){
+  const z = normalizar(subtrair(olho, alvo));
+  const x = normalizar(cruzar(cima, z));
+  const y = cruzar(z, x);
+  return new Float32Array([
+    x[0],y[0],z[0],0,
+    x[1],y[1],z[1],0,
+    x[2],y[2],z[2],0,
+    -ponto(x,olho),-ponto(y,olho),-ponto(z,olho),1]);
+}
+
+const subtrair = (a,b) => [a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+const ponto = (a,b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cruzar = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+function normalizar(v){
+  const n = Math.hypot(v[0],v[1],v[2]) || 1;
+  return [v[0]/n, v[1]/n, v[2]/n];
+}
+
+// O servidor manda [R em ordem de linha (9), t (3)]. Aqui vira mat4 em
+// ordem de coluna, que e a transposta da parte de rotacao.
+function paraModelo(c, destino){
+  destino[0]=c[0]; destino[1]=c[3]; destino[2]=c[6];  destino[3]=0;
+  destino[4]=c[1]; destino[5]=c[4]; destino[6]=c[7];  destino[7]=0;
+  destino[8]=c[2]; destino[9]=c[5]; destino[10]=c[8]; destino[11]=0;
+  destino[12]=c[9]; destino[13]=c[10]; destino[14]=c[11]; destino[15]=1;
+  return destino;
+}
+
+const IDENTIDADE = new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
+
+// ------------------------------------------------------------
+// WebGL
+// ------------------------------------------------------------
+
+const tela = $("tela");
+const gl = tela.getContext("webgl2", {antialias:true, alpha:false});
+if(!gl){
+  $("carregando").textContent =
+    "este navegador nao tem WebGL2. No iPad, iPadOS 15 ou mais novo.";
+  throw new Error("sem webgl2");
+}
+
+function compilar(tipo, fonte){
+  const s = gl.createShader(tipo);
+  gl.shaderSource(s, fonte);
+  gl.compileShader(s);
+  if(!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+    throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+
+function programa(vs, fs){
+  const p = gl.createProgram();
+  gl.attachShader(p, compilar(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, compilar(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if(!gl.getProgramParameter(p, gl.LINK_STATUS))
+    throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+
+// A malha do CAD nao traz normal, e recalcular no Python dobraria o
+// download. Em WebGL2 da para tirar a normal da propria derivada da
+// posicao no fragmento, o que ainda por cima da sombreamento plano, que e
+// o que faz peca usinada parecer peca usinada.
+const progMalha = programa(`#version 300 es
+in vec3 posicao;
+uniform mat4 uProj, uVista, uModelo;
+out vec3 vVista;
+void main(){
+  vec4 vista = uVista * uModelo * vec4(posicao, 1.0);
+  vVista = vista.xyz;
+  gl_Position = uProj * vista;
+}`, `#version 300 es
+precision highp float;
+in vec3 vVista;
+uniform vec3 uCor;
+out vec4 corSaida;
+void main(){
+  vec3 n = normalize(cross(dFdx(vVista), dFdy(vVista)));
+  // A orientacao das faces do CAD nao e confiavel: forca a normal a
+  // apontar para a camera, senao metade das pecas fica preta.
+  if(n.z < 0.0) n = -n;
+  float principal = max(dot(n, normalize(vec3(0.35, 0.45, 0.82))), 0.0);
+  float preenche  = max(dot(n, normalize(vec3(-0.6, -0.35, 0.3))), 0.0);
+  float luz = 0.28 + 0.72 * principal + 0.18 * preenche;
+  corSaida = vec4(uCor * luz, 1.0);
+}`);
+
+const progLinha = programa(`#version 300 es
+in vec3 posicao;
+uniform mat4 uProj, uVista, uModelo;
+void main(){ gl_Position = uProj * uVista * uModelo * vec4(posicao, 1.0); }`,
+`#version 300 es
+precision highp float;
+uniform vec4 uCor;
+out vec4 corSaida;
+void main(){ corSaida = uCor; }`);
+
+const uni = (p, nomes) => Object.fromEntries(
+  nomes.map(n => [n, gl.getUniformLocation(p, n)]));
+const uMalha = uni(progMalha, ["uProj","uVista","uModelo","uCor"]);
+const uLinha = uni(progLinha, ["uProj","uVista","uModelo","uCor"]);
+
+function criarMalha(posicoes, indices){
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  const vb = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+  gl.bufferData(gl.ARRAY_BUFFER, posicoes, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  const ib = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+  gl.bindVertexArray(null);
+  return {vao, n:indices.length};
+}
+
+function criarLinhas(pontos, dinamico){
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  const vb = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+  gl.bufferData(gl.ARRAY_BUFFER, pontos,
+                dinamico ? gl.DYNAMIC_DRAW : gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+  return {vao, buf:vb, n:pontos.length / 3};
+}
+
+// ------------------------------------------------------------
+// cena
+// ------------------------------------------------------------
+
+let cfg = null, elos = [], estado = null;
+const modelos = Array.from({length:7}, () => new Float32Array(16));
+let grade = null, eixosBase = null, eixosTcp = null, rastro = null;
+let dadosRastro = null, rastroIniciado = false;
+
+function malhaGrade(tamanho, divisoes){
+  const p = [], m = tamanho / 2, passo = tamanho / divisoes;
+  for(let i = 0; i <= divisoes; i++){
+    const t = -m + i * passo;
+    p.push(-m, t, 0,  m, t, 0,  t, -m, 0,  t, m, 0);
+  }
+  return new Float32Array(p);
+}
+
+async function carregar(){
+  cfg = await (await fetch("/config.json")).json();
+  document.title = cfg.robo + " - twin";
+  $("creditos").textContent = cfg.creditos.pessoas.join("  ·  ");
+
+  for(let i = 0; i < cfg.elos.length; i++){
+    const buf = await (await fetch(`/malha/${i}.bin`)).arrayBuffer();
+    const cab = new Uint32Array(buf, 0, 2);
+    const posicoes = new Float32Array(buf, 8, cab[0] * 3);
+    const indices = new Uint32Array(buf, 8 + cab[0] * 12, cab[1]);
+    elos.push({malha:criarMalha(posicoes, indices), cor:cfg.elos[i].cor});
+    $("carregando").textContent =
+      `carregando malhas do CAD... ${i + 1}/${cfg.elos.length}`;
+  }
+
+  grade = criarLinhas(malhaGrade(cfg.grade.tamanho, cfg.grade.divisoes), false);
+  eixosBase = criarLinhas(new Float32Array(18), true);
+  eixosTcp = criarLinhas(new Float32Array(18), true);
+  dadosRastro = new Float32Array(PONTOS_RASTRO * 3);
+  rastro = criarLinhas(dadosRastro, true);
+
+  const e = cfg.escala_eixos;
+  gl.bindBuffer(gl.ARRAY_BUFFER, eixosBase.buf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, new Float32Array(
+    [0,0,0, e,0,0,  0,0,0, 0,e,0,  0,0,0, 0,0,e]));
+
+  camera.raio = cfg.camera.raio;
+  camera.azimute = cfg.camera.azimute;
+  camera.elevacao = cfg.camera.elevacao;
+  camera.alvo = cfg.camera.alvo.slice();
+
+  $("carregando").style.display = "none";
+  escutar();
+  requestAnimationFrame(desenhar);
+}
+
+// ------------------------------------------------------------
+// camera em orbita
+// ------------------------------------------------------------
+
+const camera = {raio:2.5, azimute:-130, elevacao:22, alvo:[0,0,0.5]};
+const dedos = new Map();
+let distanciaInicial = 0, raioInicial = 0;
+
+tela.addEventListener("pointerdown", (ev) => {
+  tela.setPointerCapture(ev.pointerId);
+  dedos.set(ev.pointerId, {x:ev.clientX, y:ev.clientY});
+  if(dedos.size === 2){
+    distanciaInicial = separacao();
+    raioInicial = camera.raio;
+  }
+});
+
+tela.addEventListener("pointermove", (ev) => {
+  const anterior = dedos.get(ev.pointerId);
+  if(!anterior) return;
+  const dx = ev.clientX - anterior.x, dy = ev.clientY - anterior.y;
+  dedos.set(ev.pointerId, {x:ev.clientX, y:ev.clientY});
+
+  if(dedos.size === 1){
+    camera.azimute -= dx * 0.4;
+    camera.elevacao = Math.max(-85, Math.min(85, camera.elevacao + dy * 0.3));
+  }else if(dedos.size === 2 && distanciaInicial > 0){
+    camera.raio = limitarRaio(raioInicial * distanciaInicial / separacao());
+  }
+});
+
+for(const evento of ["pointerup","pointercancel","lostpointercapture"]){
+  tela.addEventListener(evento, (ev) => dedos.delete(ev.pointerId));
+}
+
+tela.addEventListener("wheel", (ev) => {
+  ev.preventDefault();
+  camera.raio = limitarRaio(camera.raio * Math.exp(ev.deltaY * 0.0012));
+}, {passive:false});
+
+tela.addEventListener("dblclick", () => { rastroIniciado = false; });
+
+function separacao(){
+  const [a, b] = [...dedos.values()];
+  return Math.hypot(a.x - b.x, a.y - b.y) || 1;
+}
+
+const limitarRaio = (r) => Math.max(0.5, Math.min(8, r));
+
+// ------------------------------------------------------------
+// desenho
+// ------------------------------------------------------------
+
+function ajustarTela(){
+  const escala = Math.min(window.devicePixelRatio || 1, 2);
+  const l = Math.floor(tela.clientWidth * escala);
+  const a = Math.floor(tela.clientHeight * escala);
+  if(tela.width !== l || tela.height !== a){ tela.width = l; tela.height = a; }
+}
+
+function desenhar(){
+  ajustarTela();
+  gl.viewport(0, 0, tela.width, tela.height);
+  gl.enable(gl.DEPTH_TEST);
+  gl.clearColor(0.055, 0.063, 0.075, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  const proj = perspectiva(Math.PI / 4, tela.width / tela.height, 0.05, 40);
+  const az = camera.azimute * Math.PI / 180, el = camera.elevacao * Math.PI / 180;
+  const olho = [
+    camera.alvo[0] + camera.raio * Math.cos(el) * Math.cos(az),
+    camera.alvo[1] + camera.raio * Math.cos(el) * Math.sin(az),
+    camera.alvo[2] + camera.raio * Math.sin(el),
+  ];
+  const vista = olhar(olho, camera.alvo, [0, 0, 1]);
+
+  // grade e eixos
+  gl.useProgram(progLinha);
+  gl.uniformMatrix4fv(uLinha.uProj, false, proj);
+  gl.uniformMatrix4fv(uLinha.uVista, false, vista);
+  gl.uniformMatrix4fv(uLinha.uModelo, false, IDENTIDADE);
+
+  gl.uniform4f(uLinha.uCor, 0.22, 0.25, 0.30, 1);
+  gl.bindVertexArray(grade.vao);
+  gl.drawArrays(gl.LINES, 0, grade.n);
+
+  const cores = [[0.95,0.35,0.35], [0.35,0.9,0.45], [0.4,0.6,1.0]];
+  for(const alvo of [eixosBase, eixosTcp]){
+    gl.bindVertexArray(alvo.vao);
+    for(let i = 0; i < 3; i++){
+      gl.uniform4f(uLinha.uCor, ...cores[i], 1);
+      gl.drawArrays(gl.LINES, i * 2, 2);
+    }
+  }
+
+  if(rastroIniciado){
+    gl.uniform4f(uLinha.uCor, 0.95, 0.35, 0.35, 1);
+    gl.bindVertexArray(rastro.vao);
+    gl.drawArrays(gl.LINE_STRIP, 0, PONTOS_RASTRO);
+  }
+
+  // o robo
+  gl.useProgram(progMalha);
+  gl.uniformMatrix4fv(uMalha.uProj, false, proj);
+  gl.uniformMatrix4fv(uMalha.uVista, false, vista);
+  for(let i = 0; i < elos.length; i++){
+    gl.uniformMatrix4fv(uMalha.uModelo, false, modelos[i]);
+    gl.uniform3fv(uMalha.uCor, elos[i].cor);
+    gl.bindVertexArray(elos[i].malha.vao);
+    gl.drawElements(gl.TRIANGLES, elos[i].malha.n, gl.UNSIGNED_INT, 0);
+  }
+
+  gl.bindVertexArray(null);
+  requestAnimationFrame(desenhar);
+}
+
+// ------------------------------------------------------------
+// estado que desce
+// ------------------------------------------------------------
+
+function aplicar(e){
+  estado = e;
+  for(let i = 0; i < e.corpos.length; i++) paraModelo(e.corpos[i], modelos[i]);
+
+  // O tripe do TCP sai da transformacao do ultimo corpo. A ponta e a
+  // origem do flange, que o servidor ja manda dentro da pose.
+  const ponta = e.ponta;
+  const esc = cfg.escala_eixos * 0.55;
+  const segmentos = new Float32Array(18);
+  for(let i = 0; i < 3; i++){
+    // coluna i da rotacao do flange, ja composta pelo servidor
+    const eixo = [e.eixos_ponta[i*3], e.eixos_ponta[i*3+1], e.eixos_ponta[i*3+2]];
+    segmentos.set(ponta, i * 6);
+    segmentos.set([ponta[0]+eixo[0]*esc, ponta[1]+eixo[1]*esc,
+                   ponta[2]+eixo[2]*esc], i * 6 + 3);
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, eixosTcp.buf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, segmentos);
+
+  // rastro em buffer de tamanho fixo: o mais velho sai, o novo entra
+  if(!rastroIniciado){
+    for(let i = 0; i < PONTOS_RASTRO; i++) dadosRastro.set(ponta, i * 3);
+    rastroIniciado = true;
+  }else{
+    const ultimo = PONTOS_RASTRO * 3 - 3;
+    const d = Math.hypot(ponta[0]-dadosRastro[ultimo],
+                         ponta[1]-dadosRastro[ultimo+1],
+                         ponta[2]-dadosRastro[ultimo+2]);
+    if(d > 0.002){
+      dadosRastro.copyWithin(0, 3);
+      dadosRastro.set(ponta, ultimo);
+    }
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, rastro.buf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, dadosRastro);
+
+  painel(e);
+}
+
+function painel(e){
+  const linhas = [`<b>${cfg.robo}</b>  ${e.estado}`, ""];
+  for(let i = 0; i < 6; i++){
+    linhas.push(`${cfg.juntas[i].padEnd(9)} ${e.q[i].toFixed(2).padStart(9)} deg`);
+  }
+  linhas.push(`<div class="sec">${cfg.titulo_cartesiano}</div>`);
+  for(let i = 0; i < 6; i++){
+    const c = cfg.cartesiano[i];
+    linhas.push(`${c.n.padEnd(3)} ${e.pose[i].toFixed(c.d).padStart(10)} ${c.u}`);
+  }
+  if(e.mensagem) linhas.push(`<div class="sec">${e.mensagem}</div>`);
+  $("painel").innerHTML = linhas.join("<br>");
+}
+
+function escutar(){
+  const es = new EventSource("/estado");
+  es.onmessage = (ev) => aplicar(JSON.parse(ev.data));
+  es.onerror = () => {
+    $("painel").innerHTML = "<b>sem conexao com o servidor</b><br>reconectando...";
+  };
+}
+
+carregar().catch((erro) => {
+  $("carregando").style.display = "grid";
+  $("carregando").textContent = "falhou: " + erro.message;
+});
+</script>
+</body>
+</html>

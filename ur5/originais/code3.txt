@@ -1,0 +1,947 @@
+import tkinter as tk
+from tkinter import ttk, messagebox
+import socket
+import math
+import threading
+import time
+
+
+# ============================================================
+# CONFIGURAÇÃO UR5
+# ============================================================
+
+UR_IP = "10.26.10.20"
+UR_PORT = 30002
+
+CANVAS_W = 800
+CANVAS_H = 600
+
+
+# ============================================================
+# APLICAÇÃO
+# ============================================================
+
+class UR5Lousa:
+
+    def __init__(self, root):
+
+        self.root = root
+        self.root.title("UR5 - Lousa Virtual")
+
+        self.tracos = []
+        self.traco_atual = None
+
+        self.desenhando = False
+        self.executando = False
+
+        self.criar_interface()
+
+
+    # ========================================================
+    # INTERFACE
+    # ========================================================
+
+    def criar_interface(self):
+
+        principal = ttk.Frame(
+            self.root,
+            padding=10
+        )
+
+        principal.pack(
+            fill="both",
+            expand=True
+        )
+
+        # ----------------------------------------------------
+        # CANVAS
+        # ----------------------------------------------------
+
+        self.canvas = tk.Canvas(
+            principal,
+            width=CANVAS_W,
+            height=CANVAS_H,
+            bg="white",
+            cursor="cross"
+        )
+
+        self.canvas.grid(
+            row=0,
+            column=0,
+            rowspan=20,
+            padx=(0, 10)
+        )
+
+        self.canvas.bind(
+            "<ButtonPress-1>",
+            self.iniciar_traco
+        )
+
+        self.canvas.bind(
+            "<B1-Motion>",
+            self.desenhar
+        )
+
+        self.canvas.bind(
+            "<ButtonRelease-1>",
+            self.finalizar_traco
+        )
+
+        # ----------------------------------------------------
+        # PAINEL
+        # ----------------------------------------------------
+
+        painel = ttk.LabelFrame(
+            principal,
+            text="Configuração",
+            padding=10
+        )
+
+        painel.grid(
+            row=0,
+            column=1,
+            sticky="n"
+        )
+
+        # área X
+        ttk.Label(
+            painel,
+            text="Largura X (mm)"
+        ).grid(
+            row=0,
+            column=0,
+            sticky="w"
+        )
+
+        self.largura = tk.DoubleVar(
+            value=200
+        )
+
+        ttk.Entry(
+            painel,
+            textvariable=self.largura,
+            width=10
+        ).grid(
+            row=0,
+            column=1
+        )
+
+        # área Y
+        ttk.Label(
+            painel,
+            text="Altura Y (mm)"
+        ).grid(
+            row=1,
+            column=0,
+            sticky="w"
+        )
+
+        self.altura = tk.DoubleVar(
+            value=150
+        )
+
+        ttk.Entry(
+            painel,
+            textvariable=self.altura,
+            width=10
+        ).grid(
+            row=1,
+            column=1
+        )
+
+        # elevação Z
+        ttk.Label(
+            painel,
+            text="Elevação Z (mm)"
+        ).grid(
+            row=2,
+            column=0,
+            sticky="w"
+        )
+
+        self.z_seguro = tk.DoubleVar(
+            value=20
+        )
+
+        ttk.Entry(
+            painel,
+            textvariable=self.z_seguro,
+            width=10
+        ).grid(
+            row=2,
+            column=1
+        )
+
+        # velocidade
+        ttk.Label(
+            painel,
+            text="Velocidade (mm/s)"
+        ).grid(
+            row=3,
+            column=0,
+            sticky="w"
+        )
+
+        self.velocidade = tk.DoubleVar(
+            value=100
+        )
+
+        ttk.Entry(
+            painel,
+            textvariable=self.velocidade,
+            width=10
+        ).grid(
+            row=3,
+            column=1
+        )
+
+        # aceleração
+        ttk.Label(
+            painel,
+            text="Aceleração (mm/s²)"
+        ).grid(
+            row=4,
+            column=0,
+            sticky="w"
+        )
+
+        self.aceleracao = tk.DoubleVar(
+            value=300
+        )
+
+        ttk.Entry(
+            painel,
+            textvariable=self.aceleracao,
+            width=10
+        ).grid(
+            row=4,
+            column=1
+        )
+
+        # simplificação
+        ttk.Label(
+            painel,
+            text="Distância pontos (px)"
+        ).grid(
+            row=5,
+            column=0,
+            sticky="w"
+        )
+
+        self.distancia_pontos = tk.DoubleVar(
+            value=5
+        )
+
+        ttk.Entry(
+            painel,
+            textvariable=self.distancia_pontos,
+            width=10
+        ).grid(
+            row=5,
+            column=1
+        )
+
+        # ----------------------------------------------------
+        # BOTÕES
+        # ----------------------------------------------------
+
+        ttk.Separator(
+            painel
+        ).grid(
+            row=6,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=10
+        )
+
+        ttk.Button(
+            painel,
+            text="DESFAZER",
+            command=self.desfazer
+        ).grid(
+            row=7,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=3
+        )
+
+        ttk.Button(
+            painel,
+            text="LIMPAR",
+            command=self.limpar
+        ).grid(
+            row=8,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=3
+        )
+
+        ttk.Button(
+            painel,
+            text="TESTAR CONEXÃO",
+            command=self.testar_conexao
+        ).grid(
+            row=9,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=3
+        )
+
+        self.botao_executar = ttk.Button(
+            painel,
+            text="EXECUTAR NO UR5",
+            command=self.confirmar_execucao
+        )
+
+        self.botao_executar.grid(
+            row=10,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(15, 3)
+        )
+
+        self.botao_parar = ttk.Button(
+            painel,
+            text="PARAR MOVIMENTO",
+            command=self.parar
+        )
+
+        self.botao_parar.grid(
+            row=11,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=3
+        )
+
+        # ----------------------------------------------------
+        # STATUS
+        # ----------------------------------------------------
+
+        self.status = tk.StringVar(
+            value="Pronto."
+        )
+
+        ttk.Label(
+            painel,
+            textvariable=self.status,
+            wraplength=220
+        ).grid(
+            row=12,
+            column=0,
+            columnspan=2,
+            pady=15
+        )
+
+        # desenho da grade
+        self.desenhar_grade()
+
+
+    # ========================================================
+    # GRADE
+    # ========================================================
+
+    def desenhar_grade(self):
+
+        passo = 50
+
+        for x in range(
+            0,
+            CANVAS_W,
+            passo
+        ):
+
+            self.canvas.create_line(
+                x,
+                0,
+                x,
+                CANVAS_H,
+                fill="#eeeeee",
+                tags="grade"
+            )
+
+        for y in range(
+            0,
+            CANVAS_H,
+            passo
+        ):
+
+            self.canvas.create_line(
+                0,
+                y,
+                CANVAS_W,
+                y,
+                fill="#eeeeee",
+                tags="grade"
+            )
+
+        # centro
+        self.canvas.create_line(
+            CANVAS_W / 2,
+            0,
+            CANVAS_W / 2,
+            CANVAS_H,
+            fill="#bbbbbb",
+            dash=(4, 4),
+            tags="grade"
+        )
+
+        self.canvas.create_line(
+            0,
+            CANVAS_H / 2,
+            CANVAS_W,
+            CANVAS_H / 2,
+            fill="#bbbbbb",
+            dash=(4, 4),
+            tags="grade"
+        )
+
+
+    # ========================================================
+    # DESENHO
+    # ========================================================
+
+    def iniciar_traco(
+        self,
+        evento
+    ):
+
+        self.desenhando = True
+
+        self.traco_atual = [
+            (
+                evento.x,
+                evento.y
+            )
+        ]
+
+        self.tracos.append(
+            self.traco_atual
+        )
+
+
+    def desenhar(
+        self,
+        evento
+    ):
+
+        if not self.desenhando:
+            return
+
+        ultimo = self.traco_atual[-1]
+
+        distancia = math.hypot(
+            evento.x - ultimo[0],
+            evento.y - ultimo[1]
+        )
+
+        minimo = self.distancia_pontos.get()
+
+        if distancia < minimo:
+            return
+
+        self.canvas.create_line(
+            ultimo[0],
+            ultimo[1],
+            evento.x,
+            evento.y,
+            fill="black",
+            width=3,
+            capstyle=tk.ROUND,
+            smooth=True,
+            tags="desenho"
+        )
+
+        self.traco_atual.append(
+            (
+                evento.x,
+                evento.y
+            )
+        )
+
+
+    def finalizar_traco(
+        self,
+        evento
+    ):
+
+        self.desenhando = False
+        self.traco_atual = None
+
+        self.status.set(
+            f"{len(self.tracos)} traço(s)"
+        )
+
+
+    # ========================================================
+    # DESFAZER
+    # ========================================================
+
+    def desfazer(self):
+
+        if not self.tracos:
+            return
+
+        self.tracos.pop()
+
+        self.redesenhar()
+
+
+    # ========================================================
+    # LIMPAR
+    # ========================================================
+
+    def limpar(self):
+
+        self.tracos = []
+
+        self.canvas.delete(
+            "desenho"
+        )
+
+        self.status.set(
+            "Lousa limpa."
+        )
+
+
+    # ========================================================
+    # REDESENHA
+    # ========================================================
+
+    def redesenhar(self):
+
+        self.canvas.delete(
+            "desenho"
+        )
+
+        for traco in self.tracos:
+
+            for i in range(
+                1,
+                len(traco)
+            ):
+
+                p1 = traco[i - 1]
+                p2 = traco[i]
+
+                self.canvas.create_line(
+                    p1[0],
+                    p1[1],
+                    p2[0],
+                    p2[1],
+                    fill="black",
+                    width=3,
+                    capstyle=tk.ROUND,
+                    smooth=True,
+                    tags="desenho"
+                )
+
+        self.status.set(
+            f"{len(self.tracos)} traço(s)"
+        )
+
+
+    # ========================================================
+    # TESTE DE REDE
+    # ========================================================
+
+    def testar_conexao(self):
+
+        try:
+
+            s = socket.socket(
+                socket.AF_INET,
+                socket.SOCK_STREAM
+            )
+
+            s.settimeout(2)
+
+            s.connect(
+                (
+                    UR_IP,
+                    UR_PORT
+                )
+            )
+
+            s.close()
+
+            self.status.set(
+                "UR5 conectado."
+            )
+
+            messagebox.showinfo(
+                "UR5",
+                f"Comunicação OK\n\n{UR_IP}:{UR_PORT}"
+            )
+
+        except Exception as erro:
+
+            messagebox.showerror(
+                "Erro",
+                str(erro)
+            )
+
+
+    # ========================================================
+    # CONVERSÃO CANVAS -> ROBÔ
+    # ========================================================
+
+    def converter_ponto(
+        self,
+        x,
+        y
+    ):
+
+        largura_m = (
+            self.largura.get()
+            / 1000.0
+        )
+
+        altura_m = (
+            self.altura.get()
+            / 1000.0
+        )
+
+        # centro da tela = TCP inicial
+        nx = (
+            x -
+            CANVAS_W / 2
+        ) / CANVAS_W
+
+        ny = (
+            CANVAS_H / 2 -
+            y
+        ) / CANVAS_H
+
+        dx = (
+            nx *
+            largura_m
+        )
+
+        dy = (
+            ny *
+            altura_m
+        )
+
+        return dx, dy
+
+
+    # ========================================================
+    # GERA URSCRIPT
+    # ========================================================
+
+    def gerar_script(self):
+
+        velocidade = (
+            self.velocidade.get()
+            / 1000.0
+        )
+
+        aceleracao = (
+            self.aceleracao.get()
+            / 1000.0
+        )
+
+        z_safe = (
+            self.z_seguro.get()
+            / 1000.0
+        )
+
+        linhas = []
+
+        linhas.append(
+            "def desenho_lousa():"
+        )
+
+        linhas.append(
+            "  p0 = get_actual_tcp_pose()"
+        )
+
+        linhas.append("")
+
+        # --------------------------------------------
+        # CADA TRAÇO
+        # --------------------------------------------
+
+        for numero, traco in enumerate(
+            self.tracos,
+            start=1
+        ):
+
+            if len(traco) < 2:
+                continue
+
+            linhas.append(
+                f"  # Traco {numero}"
+            )
+
+            x0, y0 = self.converter_ponto(
+                traco[0][0],
+                traco[0][1]
+            )
+
+            # ----------------------------------------
+            # posição elevada sobre início
+            # ----------------------------------------
+
+            linhas.append(
+                "  movel("
+                f"p[p0[0]+({x0:.6f}),"
+                f"p0[1]+({y0:.6f}),"
+                f"p0[2]+{z_safe:.6f},"
+                "p0[3],p0[4],p0[5]],"
+                f"a={aceleracao:.4f},"
+                f"v={velocidade:.4f})"
+            )
+
+            # ----------------------------------------
+            # desce para o plano
+            # ----------------------------------------
+
+            linhas.append(
+                "  movel("
+                f"p[p0[0]+({x0:.6f}),"
+                f"p0[1]+({y0:.6f}),"
+                "p0[2],"
+                "p0[3],p0[4],p0[5]],"
+                f"a={aceleracao:.4f},"
+                f"v={velocidade:.4f})"
+            )
+
+            # ----------------------------------------
+            # desenho
+            # ----------------------------------------
+
+            for x, y in traco[1:]:
+
+                dx, dy = self.converter_ponto(
+                    x,
+                    y
+                )
+
+                linhas.append(
+                    "  movel("
+                    f"p[p0[0]+({dx:.6f}),"
+                    f"p0[1]+({dy:.6f}),"
+                    "p0[2],"
+                    "p0[3],p0[4],p0[5]],"
+                    f"a={aceleracao:.4f},"
+                    f"v={velocidade:.4f},"
+                    "r=0.001)"
+                )
+
+            # ----------------------------------------
+            # levanta no final
+            # ----------------------------------------
+
+            xf, yf = self.converter_ponto(
+                traco[-1][0],
+                traco[-1][1]
+            )
+
+            linhas.append(
+                "  movel("
+                f"p[p0[0]+({xf:.6f}),"
+                f"p0[1]+({yf:.6f}),"
+                f"p0[2]+{z_safe:.6f},"
+                "p0[3],p0[4],p0[5]],"
+                f"a={aceleracao:.4f},"
+                f"v={velocidade:.4f})"
+            )
+
+            linhas.append("")
+
+        linhas.append(
+            '  textmsg("Desenho concluido")'
+        )
+
+        linhas.append(
+            "end"
+        )
+
+        return (
+            "\n".join(linhas)
+            + "\n"
+        )
+
+
+    # ========================================================
+    # CONFIRMA EXECUÇÃO
+    # ========================================================
+
+    def confirmar_execucao(self):
+
+        if self.executando:
+
+            return
+
+        if not self.tracos:
+
+            messagebox.showwarning(
+                "Lousa",
+                "Não existe desenho."
+            )
+
+            return
+
+        texto = (
+            "O TCP atual será usado como CENTRO da lousa.\n\n"
+            f"Área física:\n"
+            f"{self.largura.get():.0f} × "
+            f"{self.altura.get():.0f} mm\n\n"
+            f"Elevação entre traços: "
+            f"{self.z_seguro.get():.0f} mm\n\n"
+            "Confirme que a área está livre.\n\n"
+            "Executar?"
+        )
+
+        confirmar = messagebox.askyesno(
+            "Executar no UR5",
+            texto
+        )
+
+        if not confirmar:
+            return
+
+        thread = threading.Thread(
+            target=self.executar,
+            daemon=True
+        )
+
+        thread.start()
+
+
+    # ========================================================
+    # EXECUTAR
+    # ========================================================
+
+    def executar(self):
+
+        self.executando = True
+
+        self.status.set(
+            "Enviando trajetória..."
+        )
+
+        script = self.gerar_script()
+
+        print()
+        print("=" * 70)
+        print("URSCRIPT")
+        print("=" * 70)
+        print(script)
+
+        try:
+
+            sock = socket.socket(
+                socket.AF_INET,
+                socket.SOCK_STREAM
+            )
+
+            sock.settimeout(5)
+
+            sock.connect(
+                (
+                    UR_IP,
+                    UR_PORT
+                )
+            )
+
+            sock.sendall(
+                script.encode(
+                    "utf-8"
+                )
+            )
+
+            # pode fechar depois de transmitir o programa
+            time.sleep(1)
+
+            sock.close()
+
+            self.status.set(
+                "Desenho enviado ao UR5."
+            )
+
+        except Exception as erro:
+
+            self.status.set(
+                "Erro de comunicação."
+            )
+
+            messagebox.showerror(
+                "UR5",
+                str(erro)
+            )
+
+        finally:
+
+            self.executando = False
+
+
+    # ========================================================
+    # PARAR
+    # ========================================================
+
+    def parar(self):
+
+        try:
+
+            script = """
+def parar_python():
+  stopl(1.0)
+end
+"""
+
+            sock = socket.socket(
+                socket.AF_INET,
+                socket.SOCK_STREAM
+            )
+
+            sock.settimeout(2)
+
+            sock.connect(
+                (
+                    UR_IP,
+                    UR_PORT
+                )
+            )
+
+            sock.sendall(
+                script.encode(
+                    "utf-8"
+                )
+            )
+
+            time.sleep(0.2)
+
+            sock.close()
+
+            self.status.set(
+                "Comando de parada enviado."
+            )
+
+        except Exception as erro:
+
+            self.status.set(
+                f"Erro ao parar: {erro}"
+            )
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+if __name__ == "__main__":
+
+    root = tk.Tk()
+
+    app = UR5Lousa(
+        root
+    )
+
+    root.mainloop()

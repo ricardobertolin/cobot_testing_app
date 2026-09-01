@@ -1,0 +1,377 @@
+import socket
+import struct
+import math
+import time
+
+IP = "10.26.10.20"
+
+PORTA_COMANDO = 30002
+PORTA_REALTIME = 30003
+
+# ============================================================
+# CONFIGURAÇÃO DO TESTE
+# ============================================================
+
+ANGULO_GRAUS = 5.0
+
+VELOCIDADE = 0.05       # rad/s
+ACELERACAO = 0.05       # rad/s²
+
+PAUSA_EXTREMO = 1.0
+
+# Ordem dos testes
+ORDEM = [1, 2, 3, 4, 5, 6]
+
+
+# ============================================================
+# RECEBE N BYTES
+# ============================================================
+
+def receber_exato(sock, quantidade):
+
+    dados = b""
+
+    while len(dados) < quantidade:
+
+        parte = sock.recv(
+            quantidade - len(dados)
+        )
+
+        if not parte:
+            raise ConnectionError(
+                "Conexão encerrada pelo UR5"
+            )
+
+        dados += parte
+
+    return dados
+
+
+# ============================================================
+# LÊ POSIÇÃO ATUAL DAS 6 JUNTAS
+# ============================================================
+
+def ler_juntas():
+
+    sock = socket.socket(
+        socket.AF_INET,
+        socket.SOCK_STREAM
+    )
+
+    sock.settimeout(5)
+
+    sock.connect(
+        (IP, PORTA_REALTIME)
+    )
+
+    try:
+
+        cabecalho = receber_exato(
+            sock,
+            4
+        )
+
+        tamanho = struct.unpack(
+            "!I",
+            cabecalho
+        )[0]
+
+        dados = receber_exato(
+            sock,
+            tamanho - 4
+        )
+
+        if tamanho != 812:
+
+            print(
+                f"Aviso: pacote recebido = {tamanho} bytes"
+            )
+
+        # q_actual começa no double 31
+        offset = 31 * 8
+
+        juntas = struct.unpack_from(
+            "!6d",
+            dados,
+            offset
+        )
+
+        return list(juntas)
+
+    finally:
+
+        sock.close()
+
+
+# ============================================================
+# MOSTRA POSIÇÃO
+# ============================================================
+
+def mostrar_juntas(q):
+
+    print()
+
+    for i in range(6):
+
+        print(
+            f"J{i+1}: "
+            f"{math.degrees(q[i]):9.2f}°"
+        )
+
+    print()
+
+
+# ============================================================
+# ENVIA SCRIPT
+# ============================================================
+
+def enviar_script(script):
+
+    sock = socket.socket(
+        socket.AF_INET,
+        socket.SOCK_STREAM
+    )
+
+    sock.settimeout(5)
+
+    try:
+
+        sock.connect(
+            (IP, PORTA_COMANDO)
+        )
+
+        sock.sendall(
+            script.encode("utf-8")
+        )
+
+    finally:
+
+        # deixa tempo suficiente para o controlador
+        # receber todo o programa
+        time.sleep(0.5)
+
+        sock.close()
+
+
+# ============================================================
+# TESTA UMA JUNTA
+# ============================================================
+
+def testar_junta(numero):
+
+    indice = numero - 1
+
+    print()
+    print("=" * 60)
+    print(
+        f"TESTE DA JUNTA J{numero}"
+    )
+    print("=" * 60)
+
+    # --------------------------------------------------------
+    # Lê posição REAL atual
+    # --------------------------------------------------------
+
+    q0 = ler_juntas()
+
+    print(
+        "\nPosição atual:"
+    )
+
+    mostrar_juntas(q0)
+
+    # --------------------------------------------------------
+    # Cria posição de teste
+    # --------------------------------------------------------
+
+    qteste = q0.copy()
+
+    qteste[indice] += math.radians(
+        ANGULO_GRAUS
+    )
+
+    print(
+        f"J{numero}: "
+        f"{math.degrees(q0[indice]):.2f}°"
+        f"  ->  "
+        f"{math.degrees(qteste[indice]):.2f}°"
+    )
+
+    # --------------------------------------------------------
+    # Converte arrays para URScript
+    # --------------------------------------------------------
+
+    q0_txt = ",".join(
+        f"{x:.10f}"
+        for x in q0
+    )
+
+    qteste_txt = ",".join(
+        f"{x:.10f}"
+        for x in qteste
+    )
+
+    # --------------------------------------------------------
+    # Programa URScript
+    # --------------------------------------------------------
+
+    script = f"""
+def teste_j{numero}():
+
+  textmsg("TESTE J{numero}")
+
+  movej(
+    [{qteste_txt}],
+    a={ACELERACAO},
+    v={VELOCIDADE}
+  )
+
+  sleep({PAUSA_EXTREMO})
+
+  movej(
+    [{q0_txt}],
+    a={ACELERACAO},
+    v={VELOCIDADE}
+  )
+
+  textmsg("FIM TESTE J{numero}")
+
+end
+"""
+
+    # --------------------------------------------------------
+    # Envia
+    # --------------------------------------------------------
+
+    enviar_script(
+        script
+    )
+
+    print()
+    print(
+        f"J{numero} em movimento..."
+    )
+
+    # 5 graus / 0.05 rad/s leva ~1,75 s
+    # ida + pausa + volta
+    time.sleep(6)
+
+    # --------------------------------------------------------
+    # Verifica posição final
+    # --------------------------------------------------------
+
+    try:
+
+        qfinal = ler_juntas()
+
+        print(
+            "\nPosição após o teste:"
+        )
+
+        mostrar_juntas(qfinal)
+
+        erro = math.degrees(
+            qfinal[indice]
+            -
+            q0[indice]
+        )
+
+        print(
+            f"Erro final J{numero}: "
+            f"{erro:+.3f}°"
+        )
+
+    except Exception as e:
+
+        print(
+            "\nNão foi possível ler o robô:"
+        )
+
+        print(e)
+
+
+# ============================================================
+# PROGRAMA PRINCIPAL
+# ============================================================
+
+print()
+print("=" * 60)
+print("       UR5 CB2 - TESTE INDIVIDUAL DAS JUNTAS")
+print("=" * 60)
+
+print()
+print(
+    f"Amplitude:    +{ANGULO_GRAUS}°"
+)
+
+print(
+    f"Velocidade:   {VELOCIDADE} rad/s"
+)
+
+print(
+    f"Aceleração:   {ACELERACAO} rad/s²"
+)
+
+print()
+print(
+    "Cada junta será testada SEPARADAMENTE."
+)
+
+print()
+print(
+    "Se ocorrer Protective Stop:"
+)
+
+print(
+    "1 - NÃO continue"
+)
+
+print(
+    "2 - anote qual junta estava sendo testada"
+)
+
+print(
+    "3 - libere a falha pelo pendant"
+)
+
+print(
+    "4 - encerre este programa com Ctrl+C"
+)
+
+
+try:
+
+    for junta in ORDEM:
+
+        print()
+        print("-" * 60)
+
+        resposta = input(
+            f"ENTER para testar J{junta} "
+            f"ou digite S para sair: "
+        )
+
+        if resposta.strip().lower() == "s":
+
+            break
+
+        testar_junta(
+            junta
+        )
+
+        print()
+        print(
+            f"Teste J{junta} concluído."
+        )
+
+except KeyboardInterrupt:
+
+    print(
+        "\n\nTeste interrompido pelo usuário."
+    )
+
+
+print()
+print("=" * 60)
+print("FIM DOS TESTES")
+print("=" * 60)

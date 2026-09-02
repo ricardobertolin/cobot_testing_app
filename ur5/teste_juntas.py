@@ -94,6 +94,12 @@ def mover_e_conferir(leitor, nome, alvo, indice, timeout):
         print(f"  ERRO: movimento nao terminou em {timeout:.0f} s.")
         return None, None
 
+    if resultado == "parada_seguranca":
+        _, mensagem = ur.verificar_pronto()
+        print(f"  ERRO: o robo parou por seguranca ({mensagem}).")
+        print("  Libere pelo pendant. O motivo fica na aba Log do PolyScope.")
+        return None, None
+
     q = leitor.ler()["q"]
     erro = math.degrees(q[indice] - alvo[indice])
     return q, erro

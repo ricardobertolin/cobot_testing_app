@@ -17,7 +17,8 @@ comeca a rodar. Consequencias:
   - nao da para repetir o mesmo desenho no mesmo lugar duas vezes.
 
 Aqui o Python le a pose real pela interface real-time (30003), o campo
-"tool vector atual" nos indices 55..60 do pacote, que e o TCP calculado
+"tool vector atual" nos indices 73..78 do pacote no 1.8 (nao 55..60, que
+nesta versao vem zerado), que e o TCP calculado
 pelo controlador a partir dos encoders ja com o offset de ferramenta da
 instalacao aplicado. Voce captura essa pose como ORIGEM, e o script passa
 a usar poses ABSOLUTAS derivadas dela. O desenho fica preso a um ponto
@@ -748,6 +749,14 @@ class UR5LousaReferenciada:
                     "O script foi aceito mas o robo nao se moveu.\n\n"
                     "Verifique potencia, freios, protective stop e se ha "
                     "programa rodando no pendant.",
+                )
+            elif resultado == "parada_seguranca":
+                self._status("O robo parou por seguranca.")
+                self._erro(
+                    "UR5",
+                    "O robo parou por seguranca durante o desenho.\n\n"
+                    "Libere pelo pendant. O motivo fica na aba Log do "
+                    "PolyScope.",
                 )
             else:
                 self._status("Tempo esgotado esperando o fim do movimento.")

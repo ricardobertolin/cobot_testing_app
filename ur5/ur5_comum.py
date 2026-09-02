@@ -11,8 +11,10 @@ Interfaces do controlador CB2:
 O CB2 NAO tem RTDE (porta 30004, introduzida no CB3 3.1). Toda leitura de
 estado neste projeto vem da interface real-time (30003).
 
-Testado contra o layout de pacote do 1.8 (812 bytes). Os offsets usados aqui
-ficam na parte inicial do pacote, que e identica em 1.6 / 1.8 / 3.x.
+Testado contra o layout de pacote do 1.8 (812 bytes). Os offsets ate q e qd
+valem tambem em 1.6 e 3.x, mas os campos cartesianos NAO: neste 1.8 os
+doubles 55..66 vem zerados e a pose real do TCP esta em 73..78. Medido no
+robo do laboratorio, nao suposto pela documentacao do 3.x.
 """
 
 import math
@@ -49,10 +51,10 @@ TAMANHO_RT_18 = 812
 #   37..42   qd atual           <- velocidade real das juntas
 #   43..48   I atual
 #   49..54   I control
-#   55..60   tool vector atual  <- pose real do TCP [x,y,z,rx,ry,rz]
-#   61..66   TCP speed atual
-#   67..72   TCP force
-#   73..78   tool vector alvo
+#   55..60   tool vector atual no 3.x; ZERADO neste 1.8
+#   61..66   TCP speed atual    (nao verificado no 1.8)
+#   67..72   TCP force          (nao verificado no 1.8)
+#   73..78   tool vector        <- pose real do TCP [x,y,z,rx,ry,rz] no 1.8
 #   79..84   TCP speed alvo
 #   85       digital input bits
 #   86..91   temperatura dos motores
@@ -67,9 +69,13 @@ TAMANHO_RT_18 = 812
 # O 3.x mantem esta ordem e acrescenta campos no fim.
 IDX_Q_ATUAL = 31
 IDX_QD_ATUAL = 37
-IDX_TCP_POSE = 55
-IDX_TCP_SPEED = 61
-IDX_TCP_FORCE = 67
+# 73, nao 55: no 1.8 o campo em 55..60 e zero. Confirmado comparando os dois
+# candidatos com a cinematica direta das juntas reais, com o robo parado:
+# 73..78 fecha em 0.0005 mm contra as juntas ATUAIS e 0.0114 mm contra as
+# ALVO, ou seja, e o tool vector atual.
+IDX_TCP_POSE = 73
+IDX_TCP_SPEED = 61   # nao verificado neste 1.8
+IDX_TCP_FORCE = 67   # nao verificado neste 1.8
 IDX_ENTRADAS = 85
 IDX_TIMER = 92
 IDX_MODO_ROBO = 94
@@ -82,8 +88,8 @@ IDX_MODO_ROBO = 94
 # aparecer no campo de entradas, a 125 Hz.
 
 # Nomes de modo do robo no campo numerico da 30003. A numeracao varia
-# entre versoes, entao trate como indicativo: a fonte confiavel e o
-# comando "robotmode" do dashboard, que devolve texto.
+# entre versoes. O comando "robotmode" do dashboard responde com numero
+# no CB2 1.8 e com o nome no CB3; verificar_pronto() aceita os dois.
 MODOS_ROBO = {
     0: "RUNNING", 1: "FREEDRIVE", 2: "READY", 3: "INITIALIZING",
     4: "SECURITY_STOPPED", 5: "EMERGENCY_STOPPED", 6: "FATAL_ERROR",
@@ -168,7 +174,7 @@ def verificar_pronto(ip=None):
     Consulta o modo do robo antes de mandar movimento.
 
     Devolve (estado, mensagem) onde estado e:
-        True   robo em ROBOT_RUNNING_MODE, pronto para mover
+        True   robo em RUNNING, pronto para mover
         False  robo em algum modo que impede movimento
         None   dashboard indisponivel, estado desconhecido
 
@@ -182,18 +188,31 @@ def verificar_pronto(ip=None):
     if resposta is None:
         return None, "dashboard (29999) nao respondeu, estado do robo desconhecido"
 
-    modo = resposta.split(":")[-1].strip()
-    if modo == "ROBOT_RUNNING_MODE":
+    bruto = resposta.split(":")[-1].strip()
+
+    # O CB2 1.8 responde "Robotmode: 0"; o CB3 responde
+    # "Robotmode: ROBOT_RUNNING_MODE". Normaliza os dois para o nome
+    # curto de MODOS_ROBO antes de comparar.
+    if bruto.isdigit():
+        modo = MODOS_ROBO.get(int(bruto), f"DESCONHECIDO({bruto})")
+    else:
+        modo = bruto.removeprefix("ROBOT_").removesuffix("_MODE")
+
+    if modo == "RUNNING":
         return True, f"robo pronto ({modo})"
 
     explicacoes = {
-        "ROBOT_NO_POWER_MODE": "sem potencia nas juntas, ligue pelo pendant",
-        "ROBOT_READY_MODE": "com potencia mas freios travados, solte pelo pendant",
-        "ROBOT_INITIALIZING_MODE": "inicializando, aguarde",
-        "ROBOT_SECURITY_STOPPED_MODE": "protective stop ativo, libere pelo pendant",
-        "ROBOT_EMERGENCY_STOPPED_MODE": "emergencia acionada",
-        "ROBOT_FATAL_ERROR_MODE": "erro fatal, reinicie o controlador",
-        "ROBOT_BOOTING_MODE": "controlador iniciando",
+        "NO_POWER": "sem potencia nas juntas, ligue pelo pendant",
+        "READY": "com potencia mas freios travados, solte pelo pendant",
+        "INITIALIZING": "inicializando, aguarde",
+        "FREEDRIVE": "em freedrive, saia do modo livre pelo pendant",
+        "SECURITY_STOPPED": "protective stop ativo, libere pelo pendant",
+        "SAFEGUARD_STOP": "safeguard stop ativo, libere pelo pendant",
+        "EMERGENCY_STOPPED": "emergencia acionada",
+        "FATAL_ERROR": "erro fatal, reinicie o controlador",
+        "NOT_CONNECTED": "controlador nao conectado",
+        "SHUTDOWN": "controlador desligando",
+        "BOOTING": "controlador iniciando",
     }
     detalhe = explicacoes.get(modo, "modo inesperado")
     return False, f"robo nao pode mover: {modo} ({detalhe})"
@@ -269,6 +288,7 @@ class LeitorRT:
 
     def __init__(self, ip=None, timeout=3.0):
         ip = ip or UR_IP
+        self.ip = ip
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.settimeout(timeout)
         self.sock.connect((ip, PORTA_REALTIME))
@@ -351,47 +371,76 @@ def ler_estado(ip=None):
 
 
 def aguardar_parada(leitor, espera_inicio=4.0, tempo_maximo=300.0,
-                    limiar=0.005, estavel=1.0):
+                    limiar=0.005, estavel=1.0, limiar_pos=1e-3):
     """
     Bloqueia ate o robo comecar e depois terminar o movimento.
 
     Substitui os `time.sleep(n)` chutados. Um sleep fixo ou le a posicao
     com o robo ainda andando, ou desperdica tempo.
 
-    limiar   rad/s abaixo do qual a junta e considerada parada
-    estavel  por quanto tempo TODAS as juntas precisam ficar abaixo do
-             limiar para o movimento ser dado como concluido. Precisa ser
-             maior que qualquer pausa interna do script, senao a pausa e
-             confundida com o fim do movimento.
+    A deteccao e por POSICAO, nao por velocidade. Neste UR5 o campo de
+    velocidade de J5 oscila entre -0.058 e +0.060 rad/s com a junta
+    fisicamente parada (a posicao varia 0.015 graus em 8 s), enquanto a
+    velocidade de teste e 0.05 rad/s. Nao existe limiar de velocidade que
+    separe as duas coisas: qualquer valor acima do ruido daria por parado
+    tambem um robo em movimento. A posicao e o sinal limpo aqui.
 
-    Devolve "ok", "nao_iniciou" ou "timeout".
+    limiar_pos  rad de deslocamento, em qualquer junta, acima do qual o
+                robo e considerado em movimento. Fica bem acima do ruido
+                de posicao (~3e-4 rad) e bem abaixo do que a junta anda em
+                `estavel` segundos na velocidade de trabalho.
+    estavel     por quanto tempo TODAS as juntas precisam ficar dentro de
+                limiar_pos para o movimento ser dado como concluido.
+                Precisa ser maior que qualquer pausa interna do script,
+                senao a pausa e confundida com o fim do movimento.
+    limiar      mantido so por compatibilidade de assinatura; nao entra
+                mais na decisao.
+
+    Devolve "ok", "nao_iniciou", "timeout" ou "parada_seguranca".
     """
     t0 = time.monotonic()
     iniciou = False
-    t_parado = None
+    q_inicial = leitor.ler()["q"]
+    q_ref = q_inicial
+    t_ref = t0
 
     while True:
         agora = time.monotonic()
         if agora - t0 > tempo_maximo:
-            return "timeout"
+            return _parou_por_seguranca(leitor) or "timeout"
 
-        estado = leitor.ler()
-        movendo = max(abs(v) for v in estado["qd"]) > limiar
+        q = leitor.ler()["q"]
 
         if not iniciou:
-            if movendo:
+            if max(abs(a - b) for a, b in zip(q, q_inicial)) > limiar_pos:
                 iniciou = True
-                t_parado = None
+                q_ref, t_ref = q, agora
             elif agora - t0 > espera_inicio:
-                return "nao_iniciou"
+                return _parou_por_seguranca(leitor) or "nao_iniciou"
             continue
 
-        if movendo:
-            t_parado = None
-        elif t_parado is None:
-            t_parado = agora
-        elif agora - t_parado >= estavel:
-            return "ok"
+        if max(abs(a - b) for a, b in zip(q, q_ref)) > limiar_pos:
+            q_ref, t_ref = q, agora
+        elif agora - t_ref >= estavel:
+            return _parou_por_seguranca(leitor) or "ok"
+
+
+def _parou_por_seguranca(leitor):
+    """
+    Devolve "parada_seguranca" se o robo saiu de RUNNING, senao None.
+
+    Um robo em protective stop e um robo que terminou a trajetoria ficam
+    igualmente imoveis, e a 30003 nao distingue os dois. Sem esta checagem
+    aguardar_parada devolve "ok" sobre uma falha e o script anuncia
+    "movimento concluido" com o robo travado. Aconteceu no circulo a
+    300 mm/s.
+
+    Dashboard mudo devolve None de proposito: falta de resposta e problema
+    de comunicacao, nao evidencia de parada de seguranca, e nao deve virar
+    uma falha inventada.
+    """
+    pronto, _ = verificar_pronto(getattr(leitor, "ip", None))
+    return "parada_seguranca" if pronto is False else None
 
 
 # ============================================================
@@ -403,6 +452,13 @@ def aguardar_parada(leitor, espera_inicio=4.0, tempo_maximo=300.0,
 # instalacao, enquanto a cinematica direta abaixo devolve a pose da FLANGE.
 # A diferenca entre as duas e exatamente o TCP configurado, o que e um
 # diagnostico util antes de desenhar.
+#
+# CUIDADO ao usar essa diferenca como diagnostico: se o indice do tool
+# vector estiver errado, o campo vem zerado e a diferenca vira a distancia
+# da flange ate a BASE do robo, que e um numero grande e estavel e passa
+# facil por "TCP declarado". Foi o que aconteceu aqui com IDX_TCP_POSE=55,
+# que rendia um TCP fantasma de 495 mm. Antes de acreditar no offset,
+# confira que a pose lida nao e o vetor nulo.
 #
 # Parametros DH classicos do UR5 (validos para CB2 e CB3, nao para o e-Series).
 

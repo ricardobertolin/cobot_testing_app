@@ -523,6 +523,14 @@ class UR5Lousa:
                     "Verifique potencia, freios, protective stop e se ha "
                     "programa rodando no pendant.",
                 )
+            elif resultado == "parada_seguranca":
+                self._status("O robo parou por seguranca.")
+                self._erro(
+                    "UR5",
+                    "O robo parou por seguranca durante o desenho.\n\n"
+                    "Libere pelo pendant. O motivo fica na aba Log do "
+                    "PolyScope.",
+                )
             else:
                 self._status("Tempo esgotado esperando o fim do movimento.")
 

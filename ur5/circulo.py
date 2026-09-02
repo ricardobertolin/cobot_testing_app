@@ -210,6 +210,12 @@ def main():
                 "ha programa rodando no pendant."
             )
             return 1
+        elif resultado == "parada_seguranca":
+            print(
+                "ERRO: o robo parou por seguranca durante o movimento. "
+                "Libere pelo pendant; o motivo fica na aba Log do PolyScope."
+            )
+            return 1
         else:
             print("ERRO: tempo esgotado esperando o fim do movimento.")
             return 1

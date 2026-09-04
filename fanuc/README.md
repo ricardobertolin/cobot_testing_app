@@ -13,8 +13,10 @@ sozinho se a ferramenta encostar.
 | `modelo_fanuc.py` | Cinemática por produto de exponenciais e as malhas do CAD. Roda sozinho como autoteste das cotas. |
 | `pendant_fanuc.py` | Simulador da tela do iPendant, com as seis juntas, jog em JOINT / WORLD / TOOL, override e os LEDs de estado. |
 | `twin3d_fanuc.py` | Digital twin: o robô do CAD desenhado na pose, ao vivo. |
-| `servidor_fanuc.py` | As duas telas acima servidas no navegador, para abrir no iPad. |
-| `web/` | As páginas: `pendant.html` e `twin.html`. Sem framework e sem CDN. |
+| `pendant_twin_fanuc.py` | O pendant e o twin na mesma janela: controles à esquerda, 3D à direita. |
+| `preparar_cad_step.py` | Gera o cache de malhas a partir de um STEP de montagem, articulando o braço até a pose zero. |
+| `servidor_fanuc.py` | As telas acima servidas no navegador, para abrir no iPad. |
+| `web/` | As páginas: `pendant.html`, `twin.html` e `pendant_dt.html`. Sem framework e sem CDN. |
 
 ## Ethernet
 
@@ -113,6 +115,25 @@ O pendant publica a pose das juntas em UDP na `127.0.0.1:47101` e o twin
 desenha. É tudo local, não sai da máquina, e o robô real não é tocado: o
 R-30iA não tem interface aberta de jog nem de stream de posição.
 
+Ou as duas numa janela só, sem UDP no meio:
+
+```
+python pendant_twin_fanuc.py
+```
+
+Do lado do UR5 juntar as duas telas também resolvia um problema de
+transporte, porque a 30003 do CB2 não aguenta dois clientes. Aqui não há
+transporte nenhum para brigar. O que se ganha é o resto, que já bastava: uma
+janela em vez de duas e o 3D respondendo ao jog no mesmo quadro em que o
+número muda.
+
+Continua valendo tudo o que está no cabeçalho do `pendant_fanuc.py`: é
+simulador, não terminal remoto. E é aqui que a simetria com o UR5 acaba —
+lá existe o `pendant_real.py`, que move o robô. Deste lado não existe
+equivalente, e não por falta de vontade: movimento remoto no R-30iA passa
+por UOP, que é I/O físico ou fieldbus, e um pacote TCP não aciona nenhum
+desses sinais.
+
 ## No navegador
 
 As mesmas duas telas, sem instalar nada no cliente:
@@ -124,12 +145,72 @@ python servidor_fanuc.py
 Ele imprime o endereço da máquina na rede. No iPad, no mesmo Wi-Fi:
 
 ```
-http://<ip-do-pc>:8081/pendant
-http://<ip-do-pc>:8081/twin
+http://<ip-do-pc>:8081/pendant_dt     a tela e o 3D na mesma página
+http://<ip-do-pc>:8081/pendant        só a tela
+http://<ip-do-pc>:8081/twin           só o 3D
 ```
+
+O `/pendant_dt` é o `pendant_twin_fanuc.py` levado para o navegador, e no
+iPad é o que vale: não dá para pôr duas janelas lado a lado. Em tela larga
+fica controles à esquerda e 3D à direita; em retrato empilha, com o 3D
+embaixo. As teclas de jog seguem o COORD, como no pendant de verdade: em
+JOINT as seis linhas de junta aceitam toque e as de WORLD ficam
+esmaecidas, e no WORLD e no TOOL é o contrário.
+
+O arquivo dessa página é o mesmo que o UR5 serve, byte por byte. Ela não
+sabe cinemática nenhuma nem qual robô está do outro lado: pede
+`/config.json` e monta o que vier.
 
 No Safari, Compartilhar → Adicionar à Tela de Início, e abre em tela cheia
 com ícone próprio.
+
+### O indicador de conexão
+
+Toda página traz uma pílula na barra de cima dizendo em que pé está o
+enlace com o controlador:
+
+```
+python servidor_fanuc.py --robo 192.168.0.20
+```
+
+| Pílula | Cor | O que houve |
+|---|---|---|
+| `SIMULAÇÃO` | cinza | rodando sem `--robo`, nenhum controlador envolvido |
+| `CONTROLADOR NA REDE` | verde | responde em FTP e/ou no servidor web |
+| `SEM CONEXÃO` | vermelho | não respondeu em nenhuma das duas portas |
+| `SEM SERVIDOR` | vermelho | a página perdeu o Python |
+
+**Aqui "conectado" quer dizer menos do que no UR5, e a tela diz isso.** No
+UR5 dá para perguntar ao dashboard se o robô pode mover, e a resposta é
+sobre o robô. O R-30iA não tem canal equivalente: não publica posição, não
+aceita jog, e o estado de programa só existe pelos sinais UOP, que são I/O
+físico. O que dá para saber daqui é se o **controlador responde na rede**, e
+nada sobre a pose dele.
+
+Por isso o rótulo é `CONTROLADOR NA REDE` e não `CONECTADO`, e o detalhe
+repete que a pose na tela continua simulada. Verde aqui não significa que o
+3D está mostrando o robô de verdade — significa que dá para mandar o `.LS`
+por FTP, que é a pergunta que o fluxo offline faz de verdade.
+
+São duas portas porque falham por motivos diferentes: a 21 é o FTP, por onde
+o `.LS` sobe, e a 80 é o servidor web do iPendant, que pode estar
+desabilitado nas opções sem que a rede tenha problema algum.
+
+### Se o 3D ficar em "carregando malhas do CAD..." para sempre
+
+Quase sempre é **aba demais aberta no mesmo endereço**, e não o servidor.
+
+O `/estado` é uma resposta HTTP que nunca termina, e o navegador só abre 6
+conexões por endereço. Cada aba visível segura uma delas enquanto estiver na
+tela, então a partir da sétima não sobra conexão nem para baixar a malha.
+Feche as outras abas e recarregue — a página avisa isso na tela depois de
+alguns segundos, em vez de ficar pendurada calada.
+
+Abas em segundo plano não contam: elas fecham o fluxo de estado e devolvem a
+conexão, reabrindo quando voltam para a frente.
+
+Os dois servidores em portas diferentes também não brigam: o limite é por
+endereço, e `:8080` e `:8081` contam separado.
 
 É a arquitetura do `interface_ipad.md` construída. O navegador é cliente
 burro: não tem cinemática nenhuma, o servidor manda as sete transformações
@@ -165,6 +246,28 @@ menos de 1 MB e não vai para o git. Refazer:
 ```
 python modelo_fanuc.py --preparar
 ```
+
+Esse caminho vale para quem tem os `.obj` por peça, já no frame do robô. Se
+o que você tem é um **STEP de montagem** baixado de um portal de CAD, ele
+vem numa pose qualquer e com as peças agrupadas por submontagem, e aí o
+caminho é outro:
+
+```
+pip install cascadio trimesh scipy fast-simplification
+python preparar_cad_step.py LR_Mate_200iC.STEP
+```
+
+Ele acha os eixos de junta pelos anéis de contato entre elos vizinhos,
+**articula** o braço até a pose zero e grava o mesmo
+`malhas/fanuc_elo*.npz`. Antes de gravar qualquer coisa ele imprime as
+distâncias entre eixos vizinhos medidas no STEP ao lado das do modelo, pela
+mesma fórmula dos dois lados: se o STEP veio em milímetro sem conversão, o
+erro de mil vezes aparece ali.
+
+É o gêmeo do `preparar_cad_step.py` do UR5. A diferença de fundo entre os
+dois está na pose de destino: o CAD do UR5 foi modelado com o braço esticado
+para cima, e por isso o modelo de lá carrega um `OFFSET_CAD`. Aqui a pose
+canônica é o próprio zero do pendant.
 
 Para conferir a geometria:
 

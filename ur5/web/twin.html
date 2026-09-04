@@ -415,8 +415,20 @@ function aplicar(e){
   painel(e);
 }
 
+// Cor do ponto por nivel, igual ao da pilula das telas de pendant. Aqui
+// vira uma linha do painel, que e o unico lugar de texto que esta tela tem.
+const CORES_ROBO = {ok:"#3ddc6b", aviso:"#ffd24b", erro:"#ff5b5b",
+                    neutro:"#9aa4ad"};
+
+function linhaRobo(r){
+  if(!r) return "";
+  const cor = CORES_ROBO[r.nivel] || CORES_ROBO.neutro;
+  return `<span style="color:${cor}">&#9679;</span> ${r.rotulo}`;
+}
+
 function painel(e){
-  const linhas = [`<b>${cfg.robo}</b>  ${e.estado}`, ""];
+  const linhas = [`<b>${cfg.robo}</b>  ${e.estado}`,
+                  linhaRobo(e.robo), ""];
   for(let i = 0; i < 6; i++){
     linhas.push(`${cfg.juntas[i].padEnd(9)} ${e.q[i].toFixed(2).padStart(9)} deg`);
   }

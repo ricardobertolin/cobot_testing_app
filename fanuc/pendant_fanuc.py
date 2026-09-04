@@ -152,9 +152,7 @@ class Pendant(tk.Tk):
         self.mono_grande = tkfont.Font(family="Consolas", size=17, weight="bold")
         self.mono_pequeno = tkfont.Font(family="Consolas", size=9)
 
-        self._montar_barra()
-        self._montar_corpo()
-        self._montar_rodape()
+        self._montar_tela()
 
         self.protocol("WM_DELETE_WINDOW", self._sair)
         self.after(PERIODO, self._passo)
@@ -163,8 +161,18 @@ class Pendant(tk.Tk):
     # MONTAGEM
     # --------------------------------------------------
 
-    def _montar_barra(self):
-        topo = tk.Frame(self, bg=BARRA)
+    def _montar_tela(self):
+        """Layout desta janela. O pendant_twin_fanuc.py compoe as mesmas
+        pecas de outro jeito, com o 3D ao lado, por isso elas sao
+        separadas."""
+        self.montar_barra(self)
+        corpo = tk.Frame(self, bg=FUNDO)
+        corpo.pack(fill="both", expand=True, padx=8, pady=8)
+        self.montar_controles(corpo)
+        self.montar_rodape(self)
+
+    def montar_barra(self, pai):
+        topo = tk.Frame(pai, bg=BARRA)
         topo.pack(fill="x")
 
         self.rotulo_titulo = tk.Label(
@@ -172,7 +180,7 @@ class Pendant(tk.Tk):
             padx=8, pady=4)
         self.rotulo_titulo.pack(fill="x")
 
-        leds = tk.Frame(self, bg="#141414")
+        leds = tk.Frame(pai, bg="#141414")
         leds.pack(fill="x")
 
         self.leds = {}
@@ -183,10 +191,7 @@ class Pendant(tk.Tk):
             rotulo.pack(side="left", padx=1)
             self.leds[nome] = rotulo
 
-    def _montar_corpo(self):
-        corpo = tk.Frame(self, bg=FUNDO)
-        corpo.pack(fill="both", expand=True, padx=8, pady=8)
-
+    def montar_controles(self, corpo):
         self._montar_posicao(corpo)
         self._montar_teclas(corpo)
 
@@ -288,11 +293,11 @@ class Pendant(tk.Tk):
         botao.bind("<Leave>", lambda _e: self._parar_jog())
         return botao
 
-    def _montar_rodape(self):
-        self.rodape = tk.Label(self, text="", bg="#e8e4d4", fg="black",
+    def montar_rodape(self, pai, lado="bottom"):
+        self.rodape = tk.Label(pai, text="", bg="#e8e4d4", fg="black",
                                font=self.mono, anchor="w", padx=8, pady=4,
                                relief="sunken", bd=1)
-        self.rodape.pack(fill="x", side="bottom")
+        self.rodape.pack(fill="x", side=lado)
 
     # --------------------------------------------------
     # ACOES

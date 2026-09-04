@@ -8,6 +8,7 @@ Depois, no navegador do PC ou do iPad, na mesma rede:
 
     http://<ip-do-pc>:8081/pendant     a tela POSITION do iPendant
     http://<ip-do-pc>:8081/twin        o robo do CAD em 3D
+    http://<ip-do-pc>:8081/pendant_dt  as duas juntas, numa pagina so
 
 E a arquitetura que o interface_ipad.md propoe, construida: o navegador e
 cliente burro, toda a logica fica no Python. As paginas nao tem cinematica
@@ -42,6 +43,17 @@ NAO FALA COM O CONTROLADOR
 O mesmo do pendant_fanuc.py: o R-30iA nao tem interface aberta de jog nem
 de stream de posicao, e jog de verdade precisa do dispositivo de
 habilitacao de tres posicoes, que uma pagina web nao tem.
+
+E por isso que aqui nao existe o --espelhar nem o --comandar que o
+servidor_ur5.py tem. Nao e simetria faltando por descuido: no UR5 os dois
+modos existem porque a 30003 entrega posicao a 125 Hz e a 30002 aceita
+URScript. Deste lado nao ha nem uma coisa nem outra, e um --espelhar de
+FANUC teria que ler de um canal que nao existe.
+
+O /pendant_dt e o mesmo arquivo servido pelo UR5, e e o pendant_twin.py de
+desktop levado para o navegador: a tela e o 3D na mesma pagina, que e o
+unico arranjo que serve no iPad, onde nao da para por duas janelas lado a
+lado.
 """
 
 import argparse
@@ -73,7 +85,97 @@ PRAZO_JOG = 0.5           # s sem renovacao e o jog para sozinho
 # a tela do navegador sem precisar saber que ela existe.
 ENDERECO_TWIN = ("127.0.0.1", 47101)
 
-PAGINAS = {"pendant": "pendant.html", "twin": "twin.html"}
+PAGINAS = {"pendant": "pendant.html", "twin": "twin.html",
+           "pendant_dt": "pendant_dt.html"}
+
+
+# ============================================================
+# VIGIA DO ENLACE
+# ============================================================
+
+class Vigia:
+    """
+    Verifica se o controlador responde na rede.
+
+    AQUI "CONECTADO" QUER DIZER MENOS DO QUE NO UR5, E A TELA PRECISA DIZER
+    QUAL
+
+    No UR5 da para perguntar ao dashboard se o robo pode mover, e a resposta
+    e sobre o ROBO. O R-30iA nao tem canal equivalente: nao publica posicao,
+    nao aceita jog, e o estado de programa so existe pelos sinais UOP, que
+    sao I/O fisico. Entao o que da para saber daqui e se o CONTROLADOR
+    responde na rede, e nada sobre a pose dele.
+
+    Isso ainda e util, e e a pergunta que o fluxo offline faz de verdade:
+    da para mandar o .LS por FTP, ou nem cabo tem? E a diferenca entre
+    "transfere agora" e "vai de pendrive".
+
+    O que a tela NAO pode fazer e sugerir que o 3D esta mostrando o robo de
+    verdade. Por isso o rotulo e CONTROLADOR NA REDE, e nao CONECTADO, e o
+    detalhe repete que a pose continua sendo simulada.
+    """
+
+    PERIODO = 3.0
+    ESPERA = 1.5
+
+    # Duas portas porque elas falham por motivos diferentes: a 21 e o FTP,
+    # que e por onde o .LS sobe, e a 80 e o servidor web do iPendant, que
+    # pode estar desabilitado nas opcoes sem que a rede tenha problema.
+    PORTAS = ((21, "FTP"), (80, "web do iPendant"))
+
+    def __init__(self, ip):
+        self.ip = ip
+        self.abertas = []
+        self.respondeu = None         # None enquanto nao verificou a 1a vez
+        self.parar = threading.Event()
+        threading.Thread(target=self._laco, daemon=True).start()
+
+    def _porta_aberta(self, porta):
+        try:
+            with socket.create_connection((self.ip, porta), self.ESPERA):
+                return True
+        except OSError:
+            return False
+
+    def _laco(self):
+        while True:
+            abertas = [nome for porta, nome in self.PORTAS
+                       if self._porta_aberta(porta)]
+            self.abertas = abertas
+            self.respondeu = bool(abertas)
+            if self.parar.wait(self.PERIODO):
+                return
+
+    def fechar(self):
+        self.parar.set()
+
+
+def situacao(vigia):
+    """
+    O que a tela mostra sobre o enlace. Ver o cabecalho do Vigia para o que
+    "conectado" significa deste lado.
+    """
+    if vigia is None:
+        return {"modo": "simulacao", "nivel": "neutro", "rotulo": "SIMULACAO",
+                "detalhe": "nenhum controlador envolvido: a pose sai da "
+                           "cinematica do Python. Rode com --robo IP para "
+                           "vigiar o enlace."}
+
+    if vigia.respondeu is None:
+        return {"modo": "monitor", "nivel": "neutro", "rotulo": "VERIFICANDO",
+                "detalhe": f"procurando {vigia.ip} na rede..."}
+
+    if not vigia.respondeu:
+        return {"modo": "monitor", "nivel": "erro", "rotulo": "SEM CONEXAO",
+                "detalhe": f"{vigia.ip} nao respondeu em FTP nem no servidor "
+                           f"web. Confira o cabo, o IP e lembre que mudanca "
+                           f"de endereco no R-30iA so vale depois de cold "
+                           f"start."}
+
+    return {"modo": "monitor", "nivel": "ok", "rotulo": "CONTROLADOR NA REDE",
+            "detalhe": f"{vigia.ip} responde ({', '.join(vigia.abertas)}). "
+                       f"A pose na tela continua simulada: o R-30iA nao "
+                       f"publica posicao."}
 
 
 # ============================================================
@@ -86,7 +188,7 @@ class Estado:
     a thread da simulacao escreve, as threads de HTTP leem.
     """
 
-    def __init__(self):
+    def __init__(self, vigia=None):
         self.trava = threading.Lock()
         self.q = [0.0] * 6
         self.jog = None
@@ -96,6 +198,7 @@ class Estado:
         self.mensagem = ""
         self.mensagem_ate = 0.0
         self.falha = False
+        self.vigia = vigia
         self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     @property
@@ -223,6 +326,7 @@ class Estado:
             "mensagem": mensagem,
             "sigma": round(menor, 4),
             "avisos": mod.dentro_dos_limites(graus),
+            "robo": situacao(self.vigia),
         }
 
 
@@ -292,7 +396,17 @@ def configuracao():
         "velocidade": {"tipo": "escada", "rotulo": "OVERRIDE",
                        "valores": [nome for nome, _ in pend.OVERRIDES]},
         "poses": list(pend.POSES),
-        "reset": True,
+        # Seis eixos so: no iPendant as mesmas teclas movem as juntas ou o
+        # cartesiano conforme o COORD, ao contrario do PolyScope, que tem
+        # doze. Quem decide qual grupo aceita toque e a pagina, pelo coord
+        # que desce em /estado.
+        "jog_eixos": list(range(6)),
+        # O RESET do pendant, que limpa o FAULT. Nao e pose nem jog, entao
+        # entra como acao, no mesmo campo que o UR5 usa para PARAR e INICIO.
+        "acoes": [{"id": "reset", "texto": "RESET", "cor": "#d8c27a"}],
+        "aviso": "",
+        "comanda": False,
+        "espelho": False,
         "elos": [{"nome": nome, "cor": list(cor)}
                  for nome, _, cor in mod.ELOS],
         "camera": {"raio": 2.0, "alvo": [0.15, 0.0, 0.4],
@@ -435,10 +549,12 @@ INDICE = """<!doctype html>
  p{color:#999;max-width:40rem}
 </style>
 <h1>FANUC LR Mate 200iC</h1>
+<a href="/pendant_dt">Pendant DT &mdash; a tela e o 3D na mesma pagina</a>
 <a href="/pendant">Pendant &mdash; a tela POSITION do iPendant</a>
 <a href="/twin">Twin &mdash; o robo do CAD em 3D</a>
-<p>As duas paginas podem ficar abertas ao mesmo tempo, em maquinas
-diferentes. O estado e um so, do lado do Python.</p>
+<p>As paginas podem ficar abertas ao mesmo tempo, em maquinas diferentes. O
+estado e um so, do lado do Python. No iPad o <b>Pendant DT</b> e o que vale:
+nao da para por duas janelas lado a lado.</p>
 """
 
 
@@ -452,6 +568,10 @@ def main():
     analisador.add_argument("--porta", type=int, default=PORTA_PADRAO)
     analisador.add_argument("--host", default="0.0.0.0",
                             help="0.0.0.0 atende a rede, 127.0.0.1 so a maquina")
+    analisador.add_argument("--robo", metavar="IP",
+                            help="vigiar o enlace: a tela mostra se o "
+                                 "controlador responde na rede (FTP e web). "
+                                 "Nao le posicao, que o R-30iA nao publica.")
     opcoes = analisador.parse_args()
 
     if not mod.cache_existe():
@@ -462,9 +582,11 @@ def main():
             print(erro)
             return 1
 
+    vigia = Vigia(opcoes.robo) if opcoes.robo else None
+
     servidor = ThreadingHTTPServer((opcoes.host, opcoes.porta), Manipulador)
     servidor.daemon_threads = True
-    servidor.estado = Estado()
+    servidor.estado = Estado(vigia)
     servidor.malhas = empacotar_malhas()
     servidor.configuracao = configuracao()
     servidor.parar = threading.Event()
@@ -475,6 +597,7 @@ def main():
     total = sum(len(b) for b in servidor.malhas)
     print(f"malhas: {len(servidor.malhas)} elos, {total / 1e6:.1f} MB")
     for endereco in enderecos_locais(opcoes.host):
+        print(f"  http://{endereco}:{opcoes.porta}/pendant_dt   (tela + 3D)")
         print(f"  http://{endereco}:{opcoes.porta}/pendant")
         print(f"  http://{endereco}:{opcoes.porta}/twin")
     print("ctrl+c para encerrar")
@@ -485,6 +608,8 @@ def main():
         pass
     finally:
         servidor.parar.set()
+        if vigia is not None:
+            vigia.fechar()
         servidor.server_close()
 
     return 0

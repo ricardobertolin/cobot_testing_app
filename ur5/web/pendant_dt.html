@@ -1,0 +1,1044 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Pendant DT</title>
+<!--
+  Pendant e digital twin na MESMA pagina, versao browser.
+
+  E o pendant_twin.py de desktop levado para o navegador, e existe pelo
+  mesmo motivo que ele: com as duas telas em processos separados sao duas
+  conexoes com a 30003 do CB2, e essa interface nao aguenta dois clientes
+  sem travar o stream. Uma pagina, uma conexao, um estado.
+
+  A pagina continua sem saber cinematica. Ela pede /config.json para
+  descobrir como o robo se chama, quais teclas existem e quantas casas
+  mostrar, e depois so escuta /estado: numeros para os campos e as SETE
+  transformacoes ja prontas para as matrizes de modelo do WebGL. Todo o
+  calculo fica no Python.
+
+  O mesmo arquivo serve o UR5 e o FANUC. O que muda vem do config.
+
+  O 3D e WebGL2 puro, sem three.js e sem CDN nenhum, porque a pagina
+  precisa abrir numa rede de celula sem internet.
+-->
+<style>
+:root{
+  --fundo:#e9e9e9; --painel:#f4f4f4; --barra:#2f6ba3; --barra-ativa:#4d8bc4;
+  --tela:#fff; --tecla:#d3d8dd; --tecla-ativa:#a8c4de; --texto:#141414;
+  --fraco:#5a5a5a; --borda:#bcbcbc; --alerta:#8a1f1f;
+}
+body.fanuc{
+  --fundo:#c9c6b8; --painel:#d3d0c2; --barra:#1f3448; --barra-ativa:#2d4d68;
+  --tela:#f2f2ec; --tecla:#b9b5a6; --tecla-ativa:#8ea9c0; --texto:#141414;
+  --fraco:#4a4a4a; --borda:#8d8a7d; --alerta:#8a1f1f;
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden}
+body{
+  background:var(--fundo); color:var(--texto);
+  font:15px/1.4 -apple-system,"Segoe UI",system-ui,sans-serif;
+  display:flex; flex-direction:column;
+  touch-action:manipulation;         /* mata o zoom de toque duplo */
+  -webkit-text-size-adjust:100%;
+  user-select:none; -webkit-user-select:none;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+}
+.mono{font-family:"SF Mono",Consolas,ui-monospace,monospace;font-variant-numeric:tabular-nums}
+
+/* ---------- barra ---------- */
+header{background:var(--barra);color:#fff;display:flex;align-items:stretch;flex-wrap:wrap;flex:none}
+header .abas{display:flex}
+header .aba{padding:.7rem 1.1rem;font-size:.9rem;opacity:.7}
+header .aba.ativa{background:var(--barra-ativa);opacity:1}
+header .titulo{padding:.7rem 1.1rem;font-weight:600;white-space:nowrap}
+header .direita{margin-left:auto;display:flex;align-items:center;gap:.7rem;padding:0 .8rem;flex-wrap:wrap}
+header .estado{font-size:.85rem;opacity:.9}
+header a,header button.link{color:#fff;background:none;text-decoration:none;
+  border:1px solid rgba(255,255,255,.45);padding:.3rem .7rem;border-radius:4px;
+  font-size:.85rem;font-family:inherit;cursor:pointer}
+
+/* Pilula do enlace com o robo. O ponto carrega a cor e o texto carrega o
+   significado: cor sozinha nao serve para quem nao distingue verde de
+   vermelho, e o rotulo tem que bastar sem ela. */
+#robo{display:inline-flex;align-items:center;gap:.45rem;font-size:.8rem;
+  letter-spacing:.04em;padding:.28rem .7rem;border-radius:999px;
+  background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.25);
+  white-space:nowrap;cursor:help}
+#robo .ponto{width:.6rem;height:.6rem;border-radius:50%;background:#9aa4ad;flex:none}
+#robo.ok    .ponto{background:#3ddc6b;box-shadow:0 0 .4rem #3ddc6b}
+#robo.aviso .ponto{background:#ffd24b;box-shadow:0 0 .4rem #ffd24b}
+#robo.erro  .ponto{background:#ff5b5b;box-shadow:0 0 .4rem #ff5b5b;
+  animation:pisca 1.1s steps(1,end) infinite}
+#robo.erro{border-color:rgba(255,91,91,.75)}
+@keyframes pisca{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){#robo.erro .ponto{animation:none}}
+
+/* O aviso de que a tela move o robo de verdade. Vermelho, largura toda e
+   acima de tudo: e a mesma escolha do pendant_real.py de desktop. */
+#aviso{background:#a00000;color:#fff;font-weight:700;text-align:center;
+  padding:.5rem .8rem;font-size:.9rem;letter-spacing:.02em;flex:none;display:none}
+body.comanda #aviso{display:block}
+
+#leds{display:flex;background:#141414;gap:2px;padding:2px;flex:none}
+#leds span{flex:1;text-align:center;padding:.3rem 0;font-size:.72rem;
+  letter-spacing:.05em;color:#3a3a3a;font-family:Consolas,monospace}
+#leds span.on{color:#57e06a}
+#leds span.on[data-n=FAULT]{color:#ff4b4b}
+#leds span.on[data-n=HOLD]{color:#ffd24b}
+
+/* ---------- corpo ----------
+   Duas colunas: controles a esquerda, 3D a direita. O min-height:0 nao e
+   decoracao: sem ele o item de grid assume a altura do conteudo e o canvas
+   cresce sem parar a cada quadro, em vez de caber na celula. */
+main{flex:1;display:grid;gap:.7rem;padding:.7rem;min-height:0;
+  grid-template-columns:minmax(24rem,38rem) minmax(0,1fr)}
+/* As duas leituras lado a lado quando ha largura, e o Jog cruzando por
+   baixo. Empilhadas, as tres secoes passam de 900 px de altura e as opcoes
+   de jog caem abaixo da dobra, que e onde estao COORD, velocidade e o
+   PARAR. Nao e lugar de esconder o PARAR.
+   O 18.5rem do minmax nao e chute: e a largura minima real de uma linha
+   (rotulo + campo + unidade + duas teclas + folgas + padding da secao).
+   Menos que isso e a segunda tecla sai pela direita e some no recorte. */
+#controles{overflow:auto;min-height:0;-webkit-overflow-scrolling:touch;
+  display:grid;align-content:start;gap:0 .7rem;
+  grid-template-columns:repeat(auto-fit,minmax(18.5rem,1fr))}
+#controles section:last-child{grid-column:1/-1}
+#visor{position:relative;min-height:0;min-width:0;border:1px solid var(--borda);
+  border-radius:6px;overflow:hidden;background:#0e1013}
+#tela{display:block;width:100%;height:100%;touch-action:none}
+
+/* Retrato de iPad e telas estreitas: empilha, com o 3D embaixo e altura
+   fixa. Empilhado sem altura fixa o canvas some, porque 1fr sobre conteudo
+   que rola nao reserva nada. */
+@media (max-width:1000px), (orientation:portrait){
+  main{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) minmax(15rem,42vh)}
+}
+
+section{background:var(--painel);border:1px solid var(--borda);border-radius:6px;
+  padding:.6rem .8rem;margin-bottom:.7rem}
+h2{margin:0 0 .45rem;font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;color:var(--fraco)}
+
+.linha{display:flex;align-items:center;gap:.3rem;margin:.25rem 0}
+.rotulo{width:4rem;flex:none;font-size:.85rem;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+/* O campo encolhe ate min-width e para. Sem esse piso ele espremeria o
+   numero; sem o teto do flex ele empurraria as setas para fora do painel,
+   onde somem no recorte. */
+.valor{flex:1;min-width:4rem;text-align:right;background:var(--tela);
+  border:1px solid var(--borda);border-radius:4px;padding:.28rem .45rem;font-size:1rem}
+.unidade{width:1.7rem;flex:none;font-size:.72rem;color:var(--fraco)}
+.linha.inativa .rotulo,.linha.inativa .valor{opacity:.55}
+
+/* ---------- teclas ---------- */
+.tecla{
+  background:var(--tecla);border:1px solid var(--borda);border-radius:6px;
+  color:var(--texto);font-size:1.05rem;line-height:1;flex:none;
+  min-width:2.7rem;min-height:2.75rem;                /* ~44 px, alvo de dedo */
+  touch-action:none;                                   /* o dedo nao rola a pagina */
+  cursor:pointer;
+}
+.tecla:active,.tecla.presa{background:var(--tecla-ativa)}
+.tecla[disabled]{opacity:.35;cursor:default}
+.opcao{background:var(--tecla);border:1px solid var(--borda);border-radius:6px;
+  padding:.5rem .8rem;font-size:.85rem;cursor:pointer;min-height:2.5rem;
+  color:var(--texto);font-family:inherit}
+.opcao.ativa{background:var(--tecla-ativa);font-weight:600}
+.grupo{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.55rem;align-items:center}
+.grupo:last-child{margin-bottom:0}
+.grupo .rotulo{width:auto;color:var(--fraco);font-size:.78rem;letter-spacing:.05em}
+input[type=range]{flex:1;min-width:7rem}
+
+footer{background:var(--painel);border-top:1px solid var(--borda);flex:none;
+  padding:.5rem .8rem;font-size:.84rem;display:flex;gap:1rem;align-items:center;
+  padding-bottom:calc(.5rem + env(safe-area-inset-bottom))}
+#mensagem{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#mensagem.alerta{color:var(--alerta);font-weight:600}
+#creditos{color:var(--fraco);font-size:.75rem;text-align:right}
+
+#carregando{position:absolute;inset:0;display:grid;place-items:center;
+  background:#0e1013;color:#8fd0ff;font-size:.95rem;text-align:center;padding:1rem}
+#dica3d{position:absolute;left:0;bottom:0;padding:.35rem .7rem;color:#7d8590;
+  background:rgba(12,14,18,.75);font-size:11.5px;pointer-events:none;
+  border-top-right-radius:6px}
+</style>
+</head>
+<body>
+
+<div id="aviso"></div>
+
+<header>
+  <div class="abas" id="abas"></div>
+  <div class="titulo" id="titulo"></div>
+  <div class="direita">
+    <span id="robo" title=""><i class="ponto"></i><span id="robo-rotulo">—</span></span>
+    <span class="estado" id="estado"></span>
+    <a href="/pendant">pendant</a>
+    <a href="/twin">twin</a>
+    <button class="link" id="botao-cheia" type="button">tela cheia</button>
+  </div>
+</header>
+<div id="leds"></div>
+
+<main>
+  <div id="controles">
+    <section>
+      <h2 id="titulo-juntas"></h2>
+      <div id="juntas"></div>
+    </section>
+
+    <section>
+      <h2 id="titulo-cartesiano"></h2>
+      <div id="cartesiano"></div>
+    </section>
+
+    <section>
+      <h2>Jog</h2>
+      <div class="grupo" id="coordenadas"></div>
+      <div class="grupo" id="velocidade"></div>
+      <div class="grupo" id="poses"></div>
+      <div class="grupo" id="acoes"></div>
+    </section>
+  </div>
+
+  <div id="visor">
+    <canvas id="tela"></canvas>
+    <div id="dica3d">arrastar gira · dois dedos ou roda aproxima · duplo toque limpa o rastro</div>
+    <div id="carregando">carregando malhas do CAD...</div>
+  </div>
+</main>
+
+<footer>
+  <span id="mensagem"></span>
+  <span id="creditos"></span>
+</footer>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+const PONTOS_RASTRO = 400;
+
+let cfg = null;
+
+// ============================================================
+// COMANDOS QUE SOBEM
+// ============================================================
+
+// Pedido de jog renovado a cada 200 ms enquanto a tecla esta presa. O
+// servidor derruba o jog se parar de receber, entao pagina fechada, aba
+// escondida ou Wi-Fi caido nao deixam a junta girando sozinha. No modo que
+// comanda o robo de verdade esse e o segundo dos dois cachorros mortos: o
+// primeiro e o prazo `t` do proprio speedj, do lado do controlador.
+const RENOVACAO = 200;
+let repetidor = null;
+
+async function comandar(corpo){
+  try{
+    await fetch("/comando", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(corpo),
+    });
+  }catch(e){ /* servidor caiu: o SSE ja vai acusar */ }
+}
+
+function iniciarJog(eixo, sinal, botao){
+  pararJog();
+  botao.classList.add("presa");
+  const enviar = () => comandar({acao:"jog", eixo, sinal});
+  enviar();
+  repetidor = setInterval(enviar, RENOVACAO);
+}
+
+function pararJog(){
+  if(repetidor !== null){ clearInterval(repetidor); repetidor = null; }
+  document.querySelectorAll(".tecla.presa").forEach(b => b.classList.remove("presa"));
+  comandar({acao:"parar"});
+}
+
+function tecla(texto, obterEixo, sinal){
+  const b = document.createElement("button");
+  b.className = "tecla";
+  b.type = "button";
+  b.textContent = texto;
+  // Pointer Events cobrem dedo, caneta e mouse com o mesmo codigo. O
+  // setPointerCapture garante o evento de soltar mesmo se o dedo escorregar
+  // para fora da tecla, que e justamente o caso em que o jog ficaria preso.
+  b.addEventListener("pointerdown", (ev) => {
+    ev.preventDefault();
+    if(b.disabled) return;
+    b.setPointerCapture(ev.pointerId);
+    iniciarJog(obterEixo(), sinal, b);
+  });
+  for(const evento of ["pointerup","pointercancel","lostpointercapture"]){
+    b.addEventListener(evento, pararJog);
+  }
+  return b;
+}
+
+// Dedo que sai da tela sem soltar, aba que perde o foco: para o jog.
+// O visibilitychange tambem para o jog, e esta la embaixo junto do SSE,
+// porque aba escondida faz as duas coisas: solta o jog e devolve a conexao.
+for(const evento of ["blur","pagehide"]){
+  window.addEventListener(evento, pararJog);
+}
+
+// ============================================================
+// MONTAGEM, TODA VINDA DO CONFIG
+// ============================================================
+
+let linhasJuntas = [], linhasCartesiano = [];
+
+function linha(rotulo, unidade){
+  const div = document.createElement("div");
+  div.className = "linha";
+
+  const r = document.createElement("span");
+  r.className = "rotulo";
+  r.textContent = rotulo;
+
+  const v = document.createElement("span");
+  v.className = "valor mono";
+  v.textContent = "---";
+
+  const u = document.createElement("span");
+  u.className = "unidade";
+  u.textContent = unidade;
+
+  div.append(r, v, u);
+  return {div, rotulo:r, valor:v, unidade:u, teclas:[]};
+}
+
+// Quais eixos ganham setas. Em modo espelho ninguem ganha, e no modo que
+// comanda o robo a lista vem do servidor, porque la o jog cartesiano so
+// existe em X Y Z (o speedl do pendant_real.py nao expoe as rotacoes).
+const temJog = (eixo) => !cfg.jog_eixos || cfg.jog_eixos.includes(eixo);
+
+function montar(){
+  document.body.classList.toggle("fanuc", cfg.tema === "fanuc");
+  document.body.classList.toggle("comanda", !!cfg.comanda);
+  document.title = cfg.robo + " - pendant DT";
+  $("titulo").textContent = cfg.robo;
+  if(cfg.aviso) $("aviso").textContent = cfg.aviso;
+
+  for(const nome of cfg.abas){
+    const d = document.createElement("div");
+    d.className = "aba" + (nome === cfg.aba_ativa ? " ativa" : "");
+    d.textContent = nome;
+    $("abas").append(d);
+  }
+
+  for(const nome of cfg.leds){
+    const s = document.createElement("span");
+    s.dataset.n = nome;
+    s.textContent = nome;
+    $("leds").append(s);
+  }
+  $("leds").style.display = cfg.leds.length ? "flex" : "none";
+
+  $("titulo-juntas").textContent = cfg.titulo_juntas;
+  $("titulo-cartesiano").textContent = cfg.titulo_cartesiano;
+
+  // Leitura e jog na MESMA linha, ao contrario do /pendant, que separa os
+  // dois blocos. Aqui a coluna e estreita porque o 3D divide a tela, e o
+  // valor ao lado da seta que o move e o arranjo do pendant de verdade.
+  for(let i = 0; i < 6; i++){
+    const l = linha(cfg.juntas[i], cfg.unidade_junta);
+    montarSetas(l, () => eixoJunta(i), temJog(i));
+    $("juntas").append(l.div);
+    linhasJuntas.push(l);
+  }
+
+  for(let i = 0; i < 6; i++){
+    const c = cfg.cartesiano[i];
+    const l = linha(c.n, c.u);
+    montarSetas(l, () => eixoCartesiano(i), temJog(eixoCartesiano(i)));
+    $("cartesiano").append(l.div);
+    linhasCartesiano.push(l);
+  }
+
+  montarCoordenadas();
+  montarVelocidade();
+  montarPoses();
+  montarAcoes();
+
+  $("creditos").textContent = cfg.creditos.pessoas.join("  ·  ");
+}
+
+// Modo "duplo" (PolyScope): seis eixos de junta e mais seis cartesianos,
+// numerados 0..11, e os dois grupos jogam ao mesmo tempo.
+// Modo "unico" (iPendant): seis eixos so, e o COORD decide se eles sao as
+// juntas ou o cartesiano. Por isso o eixo e resolvido na hora do toque.
+const eixoJunta = (i) => i;
+const eixoCartesiano = (i) => cfg.jog_modo === "duplo" ? 6 + i : i;
+
+function montarSetas(l, obterEixo, ativo){
+  if(!ativo) return;
+  for(const [texto, sinal] of [["◀", -1], ["▶", +1]]){
+    const b = tecla(texto, obterEixo, sinal);
+    l.div.append(b);
+    l.teclas.push(b);
+  }
+}
+
+function montarCoordenadas(){
+  const c = cfg.coordenadas;
+  if(!c || !c.valores.length){ $("coordenadas").style.display = "none"; return; }
+
+  const r = document.createElement("span");
+  r.className = "rotulo";
+  r.textContent = c.rotulo;
+  $("coordenadas").append(r);
+
+  for(const nome of c.valores){
+    const b = document.createElement("button");
+    b.className = "opcao";
+    b.type = "button";
+    b.dataset.coord = nome;
+    b.textContent = nome;
+    b.onclick = () => comandar({
+      acao: cfg.tema === "fanuc" ? "coord" : "recurso", valor: nome});
+    $("coordenadas").append(b);
+  }
+}
+
+function montarVelocidade(){
+  const v = cfg.velocidade;
+  const r = document.createElement("span");
+  r.className = "rotulo";
+  r.textContent = v.rotulo;
+  $("velocidade").append(r);
+
+  if(v.tipo === "slider"){
+    const s = document.createElement("input");
+    s.type = "range"; s.min = v.min; s.max = v.max; s.value = v.valor;
+    const mostra = document.createElement("span");
+    mostra.className = "mono";
+    mostra.textContent = v.valor + "%";
+    s.oninput = () => {
+      mostra.textContent = s.value + "%";
+      comandar({acao:"velocidade", valor:Number(s.value)});
+    };
+    $("velocidade").append(s, mostra);
+  }else{
+    const menos = document.createElement("button");
+    menos.className = "opcao"; menos.type = "button"; menos.textContent = "−%";
+    menos.onclick = () => comandar({acao:"override", passo:-1});
+
+    const mostra = document.createElement("span");
+    mostra.className = "mono"; mostra.id = "rotulo-override";
+    mostra.style.minWidth = "4rem"; mostra.style.textAlign = "center";
+
+    const mais = document.createElement("button");
+    mais.className = "opcao"; mais.type = "button"; mais.textContent = "+%";
+    mais.onclick = () => comandar({acao:"override", passo:+1});
+
+    $("velocidade").append(menos, mostra, mais);
+  }
+}
+
+function montarPoses(){
+  for(const nome of cfg.poses){
+    const b = document.createElement("button");
+    b.className = "opcao";
+    b.type = "button";
+    b.textContent = nome;
+    b.onclick = () => comandar({acao:"pose", nome});
+    $("poses").append(b);
+  }
+  if(!cfg.poses.length) $("poses").style.display = "none";
+}
+
+// Botoes que nao sao pose nem jog: RESET do FANUC, e PARAR / INICIO do modo
+// que comanda o robo. Vem do config para a pagina nao precisar saber qual
+// robo esta do outro lado.
+function montarAcoes(){
+  const acoes = cfg.acoes || [];
+  if(!acoes.length){ $("acoes").style.display = "none"; return; }
+
+  for(const a of acoes){
+    const b = document.createElement("button");
+    b.className = "opcao";
+    b.type = "button";
+    b.textContent = a.texto;
+    if(a.cor){ b.style.background = a.cor; }
+    if(a.fg){ b.style.color = a.fg; b.style.fontWeight = "700"; }
+    b.onclick = () => {
+      // Confirmacao para o que se move sozinho. Jog e tecla presa: soltou,
+      // parou. Um movej vai ate o fim sem ninguem segurando nada, entao
+      // pede um "ok" antes, como faz o pendant_twin.py de desktop.
+      if(a.confirmar && !window.confirm(a.confirmar)) return;
+      comandar({acao:a.id});
+    };
+    $("acoes").append(b);
+  }
+}
+
+// ============================================================
+// 3D: MATRIZES
+// ============================================================
+
+function perspectiva(fovy, aspecto, perto, longe){
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (perto - longe);
+  return new Float32Array([
+    f/aspecto,0,0,0,  0,f,0,0,
+    0,0,(longe+perto)*nf,-1,  0,0,2*longe*perto*nf,0]);
+}
+
+function olhar(olho, alvo, cima){
+  const z = normalizar(subtrair(olho, alvo));
+  const x = normalizar(cruzar(cima, z));
+  const y = cruzar(z, x);
+  return new Float32Array([
+    x[0],y[0],z[0],0,
+    x[1],y[1],z[1],0,
+    x[2],y[2],z[2],0,
+    -ponto(x,olho),-ponto(y,olho),-ponto(z,olho),1]);
+}
+
+const subtrair = (a,b) => [a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+const ponto = (a,b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cruzar = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+function normalizar(v){
+  const n = Math.hypot(v[0],v[1],v[2]) || 1;
+  return [v[0]/n, v[1]/n, v[2]/n];
+}
+
+// O servidor manda [R em ordem de linha (9), t (3)]. Aqui vira mat4 em
+// ordem de coluna, que e a transposta da parte de rotacao.
+function paraModelo(c, destino){
+  destino[0]=c[0]; destino[1]=c[3]; destino[2]=c[6];  destino[3]=0;
+  destino[4]=c[1]; destino[5]=c[4]; destino[6]=c[7];  destino[7]=0;
+  destino[8]=c[2]; destino[9]=c[5]; destino[10]=c[8]; destino[11]=0;
+  destino[12]=c[9]; destino[13]=c[10]; destino[14]=c[11]; destino[15]=1;
+  return destino;
+}
+
+const IDENTIDADE = new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
+
+// ============================================================
+// 3D: WEBGL
+// ============================================================
+
+const tela = $("tela");
+const gl = tela.getContext("webgl2", {antialias:true, alpha:false});
+
+function compilar(tipo, fonte){
+  const s = gl.createShader(tipo);
+  gl.shaderSource(s, fonte);
+  gl.compileShader(s);
+  if(!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+    throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+
+function programa(vs, fs){
+  const p = gl.createProgram();
+  gl.attachShader(p, compilar(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, compilar(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if(!gl.getProgramParameter(p, gl.LINK_STATUS))
+    throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+
+let progMalha = null, progLinha = null, uMalha = null, uLinha = null;
+
+function compilarProgramas(){
+  // A malha do CAD nao traz normal, e recalcular no Python dobraria o
+  // download. Em WebGL2 da para tirar a normal da propria derivada da
+  // posicao no fragmento, o que ainda por cima da sombreamento plano, que e
+  // o que faz peca usinada parecer peca usinada.
+  progMalha = programa(`#version 300 es
+in vec3 posicao;
+uniform mat4 uProj, uVista, uModelo;
+out vec3 vVista;
+void main(){
+  vec4 vista = uVista * uModelo * vec4(posicao, 1.0);
+  vVista = vista.xyz;
+  gl_Position = uProj * vista;
+}`, `#version 300 es
+precision highp float;
+in vec3 vVista;
+uniform vec3 uCor;
+out vec4 corSaida;
+void main(){
+  vec3 n = normalize(cross(dFdx(vVista), dFdy(vVista)));
+  // A orientacao das faces do CAD nao e confiavel: forca a normal a
+  // apontar para a camera, senao metade das pecas fica preta.
+  if(n.z < 0.0) n = -n;
+  float principal = max(dot(n, normalize(vec3(0.35, 0.45, 0.82))), 0.0);
+  float preenche  = max(dot(n, normalize(vec3(-0.6, -0.35, 0.3))), 0.0);
+  float luz = 0.28 + 0.72 * principal + 0.18 * preenche;
+  corSaida = vec4(uCor * luz, 1.0);
+}`);
+
+  progLinha = programa(`#version 300 es
+in vec3 posicao;
+uniform mat4 uProj, uVista, uModelo;
+void main(){ gl_Position = uProj * uVista * uModelo * vec4(posicao, 1.0); }`,
+`#version 300 es
+precision highp float;
+uniform vec4 uCor;
+out vec4 corSaida;
+void main(){ corSaida = uCor; }`);
+
+  const uni = (p, nomes) => Object.fromEntries(
+    nomes.map(n => [n, gl.getUniformLocation(p, n)]));
+  uMalha = uni(progMalha, ["uProj","uVista","uModelo","uCor"]);
+  uLinha = uni(progLinha, ["uProj","uVista","uModelo","uCor"]);
+}
+
+function criarMalha(posicoes, indices){
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  const vb = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+  gl.bufferData(gl.ARRAY_BUFFER, posicoes, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  const ib = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+  gl.bindVertexArray(null);
+  return {vao, n:indices.length};
+}
+
+function criarLinhas(pontos, dinamico){
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  const vb = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+  gl.bufferData(gl.ARRAY_BUFFER, pontos,
+                dinamico ? gl.DYNAMIC_DRAW : gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+  return {vao, buf:vb, n:pontos.length / 3};
+}
+
+// ============================================================
+// 3D: CENA
+// ============================================================
+
+let elos = [];
+const modelos = Array.from({length:7}, () => new Float32Array(16));
+let grade = null, eixosBase = null, eixosTcp = null, rastro = null;
+let dadosRastro = null, rastroIniciado = false, pronto3d = false;
+
+function malhaGrade(tamanho, divisoes){
+  const p = [], m = tamanho / 2, passo = tamanho / divisoes;
+  for(let i = 0; i <= divisoes; i++){
+    const t = -m + i * passo;
+    p.push(-m, t, 0,  m, t, 0,  t, -m, 0,  t, m, 0);
+  }
+  return new Float32Array(p);
+}
+
+// Busca com prazo. Sem isto, uma conexao que nunca sai da fila deixa a
+// tela em "carregando malhas do CAD..." para sempre, sem dizer por que -
+// que foi exatamente o que aconteceu com abas demais abertas.
+const ESPERA_AVISO = 6000;    // ms ate explicar o que provavelmente e
+const ESPERA_CORTE = 30000;   // ms ate desistir
+
+async function buscarComPrazo(url, aoDemorar){
+  const controle = new AbortController();
+  const aviso = setTimeout(aoDemorar, ESPERA_AVISO);
+  const corte = setTimeout(() => controle.abort(), ESPERA_CORTE);
+  try{
+    return await fetch(url, {signal: controle.signal});
+  }catch(erro){
+    if(erro.name === "AbortError") throw new Error(DIAGNOSTICO);
+    throw erro;
+  }finally{
+    clearTimeout(aviso);
+    clearTimeout(corte);
+  }
+}
+
+const DIAGNOSTICO =
+  "o download da malha nao completou. A causa mais comum e simples: o " +
+  "navegador so abre 6 conexoes por endereco, e cada aba aberta deste " +
+  "servidor segura uma delas para sempre (o fluxo de estado). Com 6 abas " +
+  "no ar, a setima nao consegue baixar nada. Feche as outras abas e " +
+  "recarregue.";
+
+async function carregar3d(){
+  compilarProgramas();
+
+  for(let i = 0; i < cfg.elos.length; i++){
+    const resposta = await buscarComPrazo(`/malha/${i}.bin`, () => {
+      $("carregando").textContent =
+        `malha ${i + 1}/${cfg.elos.length} demorando... ` + DIAGNOSTICO;
+    });
+    if(!resposta.ok){
+      throw new Error(`/malha/${i}.bin respondeu ${resposta.status}`);
+    }
+    const buf = await resposta.arrayBuffer();
+    const cab = new Uint32Array(buf, 0, 2);
+    const posicoes = new Float32Array(buf, 8, cab[0] * 3);
+    const indices = new Uint32Array(buf, 8 + cab[0] * 12, cab[1]);
+    elos.push({malha:criarMalha(posicoes, indices), cor:cfg.elos[i].cor});
+    $("carregando").textContent =
+      `carregando malhas do CAD... ${i + 1}/${cfg.elos.length}`;
+  }
+
+  grade = criarLinhas(malhaGrade(cfg.grade.tamanho, cfg.grade.divisoes), false);
+  eixosBase = criarLinhas(new Float32Array(18), true);
+  eixosTcp = criarLinhas(new Float32Array(18), true);
+  dadosRastro = new Float32Array(PONTOS_RASTRO * 3);
+  rastro = criarLinhas(dadosRastro, true);
+
+  const e = cfg.escala_eixos;
+  gl.bindBuffer(gl.ARRAY_BUFFER, eixosBase.buf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, new Float32Array(
+    [0,0,0, e,0,0,  0,0,0, 0,e,0,  0,0,0, 0,0,e]));
+
+  camera.raio = cfg.camera.raio;
+  camera.azimute = cfg.camera.azimute;
+  camera.elevacao = cfg.camera.elevacao;
+  camera.alvo = cfg.camera.alvo.slice();
+
+  $("carregando").style.display = "none";
+  pronto3d = true;
+  requestAnimationFrame(desenhar);
+}
+
+// ---------- camera em orbita ----------
+
+const camera = {raio:2.5, azimute:-130, elevacao:22, alvo:[0,0,0.5]};
+const dedos = new Map();
+let distanciaInicial = 0, raioInicial = 0;
+
+tela.addEventListener("pointerdown", (ev) => {
+  tela.setPointerCapture(ev.pointerId);
+  dedos.set(ev.pointerId, {x:ev.clientX, y:ev.clientY});
+  if(dedos.size === 2){
+    distanciaInicial = separacao();
+    raioInicial = camera.raio;
+  }
+});
+
+tela.addEventListener("pointermove", (ev) => {
+  const anterior = dedos.get(ev.pointerId);
+  if(!anterior) return;
+  const dx = ev.clientX - anterior.x, dy = ev.clientY - anterior.y;
+  dedos.set(ev.pointerId, {x:ev.clientX, y:ev.clientY});
+
+  if(dedos.size === 1){
+    camera.azimute -= dx * 0.4;
+    camera.elevacao = Math.max(-85, Math.min(85, camera.elevacao + dy * 0.3));
+  }else if(dedos.size === 2 && distanciaInicial > 0){
+    camera.raio = limitarRaio(raioInicial * distanciaInicial / separacao());
+  }
+});
+
+for(const evento of ["pointerup","pointercancel","lostpointercapture"]){
+  tela.addEventListener(evento, (ev) => dedos.delete(ev.pointerId));
+}
+
+tela.addEventListener("wheel", (ev) => {
+  ev.preventDefault();
+  camera.raio = limitarRaio(camera.raio * Math.exp(ev.deltaY * 0.0012));
+}, {passive:false});
+
+tela.addEventListener("dblclick", () => { rastroIniciado = false; });
+
+function separacao(){
+  const [a, b] = [...dedos.values()];
+  return Math.hypot(a.x - b.x, a.y - b.y) || 1;
+}
+
+const limitarRaio = (r) => Math.max(0.5, Math.min(8, r));
+
+// ---------- desenho ----------
+
+function ajustarTela(){
+  const escala = Math.min(window.devicePixelRatio || 1, 2);
+  const l = Math.floor(tela.clientWidth * escala);
+  const a = Math.floor(tela.clientHeight * escala);
+  if(l > 0 && a > 0 && (tela.width !== l || tela.height !== a)){
+    tela.width = l; tela.height = a;
+  }
+}
+
+function desenhar(){
+  requestAnimationFrame(desenhar);
+  ajustarTela();
+  if(!tela.width || !tela.height) return;
+
+  gl.viewport(0, 0, tela.width, tela.height);
+  gl.enable(gl.DEPTH_TEST);
+  gl.clearColor(0.055, 0.063, 0.075, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  const proj = perspectiva(Math.PI / 4, tela.width / tela.height, 0.05, 40);
+  const az = camera.azimute * Math.PI / 180, el = camera.elevacao * Math.PI / 180;
+  const olho = [
+    camera.alvo[0] + camera.raio * Math.cos(el) * Math.cos(az),
+    camera.alvo[1] + camera.raio * Math.cos(el) * Math.sin(az),
+    camera.alvo[2] + camera.raio * Math.sin(el),
+  ];
+  const vista = olhar(olho, camera.alvo, [0, 0, 1]);
+
+  // grade e eixos
+  gl.useProgram(progLinha);
+  gl.uniformMatrix4fv(uLinha.uProj, false, proj);
+  gl.uniformMatrix4fv(uLinha.uVista, false, vista);
+  gl.uniformMatrix4fv(uLinha.uModelo, false, IDENTIDADE);
+
+  gl.uniform4f(uLinha.uCor, 0.22, 0.25, 0.30, 1);
+  gl.bindVertexArray(grade.vao);
+  gl.drawArrays(gl.LINES, 0, grade.n);
+
+  const cores = [[0.95,0.35,0.35], [0.35,0.9,0.45], [0.4,0.6,1.0]];
+  for(const alvo of [eixosBase, eixosTcp]){
+    gl.bindVertexArray(alvo.vao);
+    for(let i = 0; i < 3; i++){
+      gl.uniform4f(uLinha.uCor, ...cores[i], 1);
+      gl.drawArrays(gl.LINES, i * 2, 2);
+    }
+  }
+
+  if(rastroIniciado){
+    gl.uniform4f(uLinha.uCor, 0.95, 0.35, 0.35, 1);
+    gl.bindVertexArray(rastro.vao);
+    gl.drawArrays(gl.LINE_STRIP, 0, PONTOS_RASTRO);
+  }
+
+  // o robo
+  gl.useProgram(progMalha);
+  gl.uniformMatrix4fv(uMalha.uProj, false, proj);
+  gl.uniformMatrix4fv(uMalha.uVista, false, vista);
+  for(let i = 0; i < elos.length; i++){
+    gl.uniformMatrix4fv(uMalha.uModelo, false, modelos[i]);
+    gl.uniform3fv(uMalha.uCor, elos[i].cor);
+    gl.bindVertexArray(elos[i].malha.vao);
+    gl.drawElements(gl.TRIANGLES, elos[i].malha.n, gl.UNSIGNED_INT, 0);
+  }
+
+  gl.bindVertexArray(null);
+}
+
+function aplicar3d(e){
+  if(!pronto3d) return;
+
+  for(let i = 0; i < e.corpos.length; i++) paraModelo(e.corpos[i], modelos[i]);
+
+  // O tripe do TCP sai da transformacao do ultimo corpo. A ponta e a origem
+  // do flange, que o servidor ja manda pronta.
+  const ponta = e.ponta;
+  const esc = cfg.escala_eixos * 0.55;
+  const segmentos = new Float32Array(18);
+  for(let i = 0; i < 3; i++){
+    // coluna i da rotacao do flange, ja composta pelo servidor
+    const eixo = [e.eixos_ponta[i*3], e.eixos_ponta[i*3+1], e.eixos_ponta[i*3+2]];
+    segmentos.set(ponta, i * 6);
+    segmentos.set([ponta[0]+eixo[0]*esc, ponta[1]+eixo[1]*esc,
+                   ponta[2]+eixo[2]*esc], i * 6 + 3);
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, eixosTcp.buf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, segmentos);
+
+  // rastro em buffer de tamanho fixo: o mais velho sai, o novo entra
+  if(!rastroIniciado){
+    for(let i = 0; i < PONTOS_RASTRO; i++) dadosRastro.set(ponta, i * 3);
+    rastroIniciado = true;
+  }else{
+    const ultimo = PONTOS_RASTRO * 3 - 3;
+    const d = Math.hypot(ponta[0]-dadosRastro[ultimo],
+                         ponta[1]-dadosRastro[ultimo+1],
+                         ponta[2]-dadosRastro[ultimo+2]);
+    if(d > 0.002){
+      dadosRastro.copyWithin(0, 3);
+      dadosRastro.set(ponta, ultimo);
+    }
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, rastro.buf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, dadosRastro);
+}
+
+// ============================================================
+// ESTADO QUE DESCE
+// ============================================================
+
+function aplicar(e){
+  for(let i = 0; i < 6; i++){
+    linhasJuntas[i].valor.textContent = e.q[i].toFixed(2);
+  }
+  for(let i = 0; i < 6; i++){
+    linhasCartesiano[i].valor.textContent = e.pose[i].toFixed(cfg.cartesiano[i].d);
+  }
+
+  // No modo "unico" as seis teclas sao as juntas ou o cartesiano, conforme o
+  // COORD. As duas listas ficam na tela, mas so uma aceita toque, e a outra
+  // esmaece: relabelar as mesmas teclas esconderia metade da leitura.
+  if(cfg.jog_modo !== "duplo"){
+    const junta = !e.coord || e.coord === "JOINT";
+    ativarGrupo(linhasJuntas, junta);
+    ativarGrupo(linhasCartesiano, !junta);
+  }
+
+  const atual = e.coord || e.recurso;
+  document.querySelectorAll("[data-coord]").forEach(b => {
+    b.classList.toggle("ativa", b.dataset.coord === atual);
+  });
+
+  const rotulo = $("rotulo-override");
+  if(rotulo) rotulo.textContent = e.override;
+
+  aplicarRobo(e.robo);
+
+  $("estado").textContent = e.estado;
+  $("mensagem").textContent = e.mensagem;
+  $("mensagem").classList.toggle("alerta", !!e.falha);
+
+  if(e.leds){
+    for(const s of $("leds").children){
+      s.classList.toggle("on", !!e.leds[s.dataset.n]);
+    }
+  }
+
+  aplicar3d(e);
+}
+
+// Estado do enlace com o robo. Quem decide o que "conectado" significa e o
+// servidor, que e quem sabe o que ha do outro lado: no UR5 ele pergunta ao
+// dashboard se o robo pode mover, no FANUC ele so consegue dizer se o
+// controlador responde na rede. A pagina nao inventa nada, so pinta.
+function aplicarRobo(r){
+  const caixa = $("robo");
+  if(!r){ caixa.style.display = "none"; return; }
+  caixa.style.display = "inline-flex";
+  caixa.classList.remove("ok", "aviso", "erro", "neutro");
+  caixa.classList.add(r.nivel);
+  $("robo-rotulo").textContent = r.rotulo;
+  // O detalhe e onde mora a explicacao acionavel ("sem potencia, ligue pelo
+  // pendant"). Fica no title para nao roubar a barra, que e estreita.
+  caixa.title = r.detalhe || "";
+}
+
+function ativarGrupo(linhas, ativo){
+  for(const l of linhas){
+    l.div.classList.toggle("inativa", !ativo);
+    for(const b of l.teclas) b.disabled = !ativo;
+  }
+}
+
+let fonte = null;
+
+function escutar(){
+  if(fonte !== null) return;
+  fonte = new EventSource("/estado");
+  fonte.onmessage = (ev) => aplicar(JSON.parse(ev.data));
+  fonte.onerror = () => {
+    $("estado").textContent = "sem conexao";
+    $("mensagem").textContent = "sem conexao com o servidor, reconectando...";
+    $("mensagem").classList.add("alerta");
+    // Sem servidor nao ha como saber nada do robo. Deixar a pilula no
+    // ultimo valor conhecido seria mentir: ela diria CONECTADO com o
+    // Python morto.
+    aplicarRobo({nivel:"erro", rotulo:"SEM SERVIDOR",
+                 detalhe:"a pagina perdeu o Python. O estado do robo aqui "
+                       + "e desconhecido, nao 'igual ao de antes'."});
+    // O EventSource reconecta sozinho. Nao fechar aqui e o que faz a pagina
+    // voltar sozinha quando o Wi-Fi do iPad oscila. Solta o jog por
+    // seguranca: sem canal de subida nao da para garantir o "parar".
+    pararJog();
+  };
+}
+
+function parar_de_escutar(){
+  if(fonte === null) return;
+  fonte.close();
+  fonte = null;
+}
+
+// Aba escondida devolve a conexao.
+//
+// O /estado e uma resposta que nunca termina, entao cada aba aberta segura
+// uma das 6 conexoes que o navegador permite por endereco - para sempre,
+// mesmo em segundo plano, mesmo sem ninguem olhando. Com seis abas no ar a
+// setima nao consegue baixar nem a propria pagina.
+//
+// Uma aba escondida nao precisa de estado ao vivo: ninguem esta vendo. Ela
+// fecha o fluxo, libera o slot e reabre ao voltar. Na pratica isso troca
+// "6 abas abertas" por "6 abas VISIVEIS ao mesmo tempo", que num notebook
+// ou num iPad nao acontece.
+document.addEventListener("visibilitychange", () => {
+  if(document.hidden){
+    pararJog();            // ja valia por seguranca, agora tambem libera
+    parar_de_escutar();
+  }else{
+    escutar();
+  }
+});
+
+// ============================================================
+// TELA CHEIA
+// ============================================================
+
+// No iPad a rota boa e Compartilhar -> Adicionar a Tela de Inicio, que abre
+// sem barra de endereco. O botao existe para o notebook, e some sozinho se
+// o navegador nao tiver a API.
+const botaoCheia = $("botao-cheia");
+if(!document.documentElement.requestFullscreen){
+  botaoCheia.style.display = "none";
+}else{
+  botaoCheia.onclick = () => {
+    if(document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen().catch(() => {});
+  };
+  document.addEventListener("fullscreenchange", () => {
+    botaoCheia.textContent = document.fullscreenElement ? "sair" : "tela cheia";
+  });
+}
+
+// ============================================================
+// PARTIDA
+// ============================================================
+
+(async () => {
+  cfg = await (await fetch("/config.json")).json();
+  montar();
+
+  // AS MALHAS PRIMEIRO, O SSE DEPOIS. A ordem nao e estetica.
+  //
+  // O navegador abre no maximo 6 conexoes por endereco em HTTP/1.1, e o
+  // /estado e uma resposta que nunca termina: ela segura uma dessas 6 pelo
+  // tempo todo em que a aba viver. Abrindo o SSE antes, a pagina gasta um
+  // slot permanente e so entao vai buscar 1.75 MB de malha - e se os
+  // outros slots ja estiverem tomados por outras abas, esse download nunca
+  // sai da fila e a tela fica em "carregando malhas do CAD..." para
+  // sempre. Foi assim que quebrou.
+  //
+  // Nesta ordem o download acontece com o slot ainda livre. Se faltar
+  // conexao, quem espera passa a ser o SSE, e ai o estrago e pequeno: o
+  // EventSource reconecta sozinho, enquanto um fetch de malha parado nao
+  // se recupera nunca. O twin.html sempre carregou nesta ordem.
+  if(gl){
+    try{
+      await carregar3d();
+    }catch(erro){
+      $("carregando").style.display = "grid";
+      $("carregando").textContent = "3D falhou: " + erro.message;
+    }
+  }else{
+    // Os controles funcionam mesmo sem 3D. Um iPad velho demais para
+    // WebGL2 ainda serve de tela de operacao, e e melhor dizer isso do que
+    // mostrar uma pagina em branco.
+    $("carregando").textContent =
+      "este navegador nao tem WebGL2, o 3D fica de fora. " +
+      "No iPad, iPadOS 15 ou mais novo. Os controles continuam valendo.";
+  }
+
+  escutar();
+})();
+</script>
+</body>
+</html>

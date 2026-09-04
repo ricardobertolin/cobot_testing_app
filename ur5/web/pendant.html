@@ -51,6 +51,28 @@ header .estado{font-size:.85rem;opacity:.9}
 header a{color:#fff;text-decoration:none;border:1px solid rgba(255,255,255,.45);
   padding:.3rem .7rem;border-radius:4px;font-size:.85rem}
 
+/* Pilula do enlace com o robo. O ponto carrega a cor e o texto carrega o
+   significado: cor sozinha nao serve para quem nao distingue verde de
+   vermelho, e o rotulo tem que bastar sem ela. */
+#robo{display:inline-flex;align-items:center;gap:.45rem;font-size:.8rem;
+  letter-spacing:.04em;padding:.28rem .7rem;border-radius:999px;
+  background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.25);
+  white-space:nowrap;cursor:help}
+#robo .ponto{width:.6rem;height:.6rem;border-radius:50%;background:#9aa4ad;flex:none}
+#robo.ok    .ponto{background:#3ddc6b;box-shadow:0 0 .4rem #3ddc6b}
+#robo.aviso .ponto{background:#ffd24b;box-shadow:0 0 .4rem #ffd24b}
+#robo.erro  .ponto{background:#ff5b5b;box-shadow:0 0 .4rem #ff5b5b;
+  animation:pisca 1.1s steps(1,end) infinite}
+#robo.erro{border-color:rgba(255,91,91,.75)}
+@keyframes pisca{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){#robo.erro .ponto{animation:none}}
+
+/* O aviso de que a tela move o robo de verdade. Vermelho, largura toda e
+   acima de tudo: e a mesma escolha do pendant_real.py de desktop. */
+#aviso{background:#a00000;color:#fff;font-weight:700;text-align:center;
+  padding:.5rem .8rem;font-size:.9rem;letter-spacing:.02em;display:none}
+body.comanda #aviso{display:block}
+
 #leds{display:flex;background:#141414;gap:2px;padding:2px}
 #leds span{flex:1;text-align:center;padding:.3rem 0;font-size:.72rem;
   letter-spacing:.05em;color:#3a3a3a;font-family:Consolas,monospace}
@@ -112,11 +134,15 @@ footer{background:var(--painel);border-top:1px solid var(--borda);
 </head>
 <body>
 
+<div id="aviso"></div>
+
 <header>
   <div class="abas" id="abas"></div>
   <div class="titulo" id="titulo"></div>
   <div class="direita">
+    <span id="robo" title=""><i class="ponto"></i><span id="robo-rotulo">—</span></span>
     <span class="estado" id="estado"></span>
+    <a href="/pendant_dt">tela + 3D</a>
     <a href="/twin">twin 3D</a>
   </div>
 </header>
@@ -140,6 +166,7 @@ footer{background:var(--painel);border-top:1px solid var(--borda);
     <div id="teclas"></div>
     <div class="grupo" id="velocidade" style="margin-top:.9rem"></div>
     <div class="grupo" id="poses"></div>
+    <div class="grupo" id="acoes"></div>
   </section>
 </main>
 
@@ -230,11 +257,15 @@ function linha(rotulo, unidade, teclas){
 
 let leiturasJuntas = [], leiturasCartesiano = [], linhasJog = [];
 
+const temJog = (eixo) => !cfg.jog_eixos || cfg.jog_eixos.includes(eixo);
+
 function montar(){
   document.body.classList.toggle("fanuc", cfg.tema === "fanuc");
   document.body.classList.toggle("duplo", cfg.jog_modo === "duplo");
+  document.body.classList.toggle("comanda", !!cfg.comanda);
   document.title = cfg.robo + " - pendant";
   $("titulo").textContent = cfg.robo;
+  if(cfg.aviso) $("aviso").textContent = cfg.aviso;
 
   for(const nome of cfg.abas){
     const d = document.createElement("div");
@@ -269,8 +300,29 @@ function montar(){
   montarTeclas();
   montarVelocidade();
   montarPoses();
+  montarAcoes();
 
   $("creditos").textContent = cfg.creditos.pessoas.join("  ·  ");
+}
+
+// Botoes que nao sao pose nem jog: PARAR e INICIO do modo que comanda o robo
+// de verdade. Vem do config para a pagina nao precisar saber qual robo esta
+// do outro lado nem em que modo o servidor subiu.
+function montarAcoes(){
+  for(const a of (cfg.acoes || [])){
+    const b = document.createElement("button");
+    b.className = "opcao";
+    b.textContent = a.texto;
+    if(a.cor) b.style.background = a.cor;
+    if(a.fg){ b.style.color = a.fg; b.style.fontWeight = "700"; }
+    b.onclick = () => {
+      // Confirmacao para o que se move sozinho. Jog e tecla presa: soltou,
+      // parou. Um movej vai ate o fim sem ninguem segurando nada.
+      if(a.confirmar && !window.confirm(a.confirmar)) return;
+      comandar({acao:a.id});
+    };
+    $("acoes").append(b);
+  }
 }
 
 function montarCoordenadas(){
@@ -311,8 +363,13 @@ function montarTeclas(){
     }
     for(let i = 0; i < 6; i++){
       const eixo = g.base + i;
-      const l = linha(g.nomes[i], "", [tecla("◀", eixo, -1),
-                                       tecla("▶", eixo, +1)]);
+      // Um eixo fora de jog_eixos aparece como leitura, sem setas. Tecla que
+      // existe e nao faz nada e pior que a ausencia dela: o operador aperta,
+      // o robo nao anda, e a duvida vira se o robo travou. Config antigo sem
+      // o campo continua valendo como "todos".
+      const teclas = temJog(eixo) ? [tecla("◀", eixo, -1), tecla("▶", eixo, +1)]
+                                  : [];
+      const l = linha(g.nomes[i], "", teclas);
       coluna.append(l.div);
       linhasJog.push({linha:l, eixo});
     }
@@ -363,14 +420,6 @@ function montarPoses(){
     b.onclick = () => comandar({acao:"pose", nome});
     $("poses").append(b);
   }
-  if(cfg.reset){
-    const b = document.createElement("button");
-    b.className = "opcao";
-    b.textContent = "RESET";
-    b.style.background = "#d8c27a";
-    b.onclick = () => comandar({acao:"reset"});
-    $("poses").append(b);
-  }
 }
 
 // ------------------------------------------------------------
@@ -409,6 +458,8 @@ function aplicar(e){
   const rotulo = $("rotulo-override");
   if(rotulo) rotulo.textContent = e.override;
 
+  aplicarRobo(e.robo);
+
   $("estado").textContent = e.estado;
   $("mensagem").textContent = e.mensagem;
   $("mensagem").classList.toggle("alerta", !!e.falha);
@@ -420,12 +471,31 @@ function aplicar(e){
   }
 }
 
+// Estado do enlace com o robo. Quem decide o que "conectado" significa e o
+// servidor, que e quem sabe o que ha do outro lado: no UR5 ele pergunta ao
+// dashboard se o robo pode mover, no FANUC ele so consegue dizer se o
+// controlador responde na rede. A pagina nao inventa nada, so pinta.
+function aplicarRobo(r){
+  const caixa = $("robo");
+  if(!r){ caixa.style.display = "none"; return; }
+  caixa.style.display = "inline-flex";
+  caixa.classList.remove("ok", "aviso", "erro", "neutro");
+  caixa.classList.add(r.nivel);
+  $("robo-rotulo").textContent = r.rotulo;
+  caixa.title = r.detalhe || "";
+}
+
 function escutar(){
   const es = new EventSource("/estado");
   es.onmessage = (ev) => aplicar(JSON.parse(ev.data));
   es.onerror = () => {
     $("estado").textContent = "sem conexao com o servidor";
     $("mensagem").textContent = "reconectando...";
+    // Sem servidor nao ha como saber nada do robo. Deixar a pilula no
+    // ultimo valor conhecido seria mentir.
+    aplicarRobo({nivel:"erro", rotulo:"SEM SERVIDOR",
+                 detalhe:"a pagina perdeu o Python. O estado do robo aqui "
+                       + "e desconhecido, nao 'igual ao de antes'."});
     // O EventSource reconecta sozinho. Nao fechar aqui e o que faz a
     // pagina voltar sozinha quando o Wi-Fi do iPad oscila.
   };

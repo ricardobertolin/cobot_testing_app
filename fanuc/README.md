@@ -15,6 +15,8 @@ sozinho se a ferramenta encostar.
 | `twin3d_fanuc.py` | Digital twin: o robô do CAD desenhado na pose, ao vivo. |
 | `pendant_twin_fanuc.py` | O pendant e o twin na mesma janela: controles à esquerda, 3D à direita. |
 | `preparar_cad_step.py` | Gera o cache de malhas a partir de um STEP de montagem, articulando o braço até a pose zero. |
+| `monitor_fanuc.py` | Monitor ao vivo do robô real no terminal: deadman, E-stops, fence e as seis juntas, lidos por FTP. Somente leitura. |
+| `monitor_gui_fanuc.py` | O mesmo monitor em janela, com pílula de estado, LEDs e réguas de junta. |
 | `servidor_fanuc.py` | As telas acima servidas no navegador, para abrir no iPad. |
 | `web/` | As páginas: `pendant.html`, `twin.html` e `pendant_dt.html`. Sem framework e sem CDN. |
 
@@ -63,24 +65,53 @@ opções, mas a rede está boa.
 
 ### Transferir o `.LS`
 
-O controlador roda servidor FTP. Do PC:
+O controlador roda servidor FTP, com login **anônimo e sem senha**. Do PC:
 
 ```
 ftp 192.168.0.20
-cd md:
+cd fr:
 put LOUSA.LS
 ```
 
-Os dispositivos do controlador são `MD:` (RAM disk, onde ficam os programas),
-`FR:` (FROM, memória não volátil), `MC:` (cartão de memória) e `UD1:` (USB).
+**É `fr:`, e não `md:`.** Essa é a pegadinha, e ela custa tempo porque o
+`MD:` é justamente onde os programas moram: é de lá que você lista os
+`.LS` e é o device que todo tutorial manda usar. Só que ele é uma **visão
+somente-leitura** da memória de programas, e o servidor FTP recusa escrita
+nele:
+
+```
+550 Device is protected
+```
+
+O mesmo vale para o `MDB:`. Quem aceita `put` é o `FR:`, a FROM, que é
+memória não volátil e por isso o destino certo de qualquer jeito.
+
+Os dispositivos, e o que dá para fazer em cada um por FTP:
+
+| Device | O que é | Leitura | Escrita |
+|---|---|---|---|
+| `MD:` | RAM disk, onde os programas ficam | sim | **não** — `550 Device is protected` |
+| `MDB:` | espelho de backup do `MD:` | sim | **não** — mesma recusa |
+| `FR:` | FROM, memória não volátil | sim | **sim** — é por aqui que o `.LS` sobe |
+| `RD:` | RAM disk de uso geral, volátil | sim | sim, mas some ao desligar |
+| `MC:` | cartão de memória | só se houver cartão | idem |
+| `UD1:` | pendrive | só se houver pendrive | idem |
+
+`MC:` e `UD1:` respondem `501 Invalid device or path name` quando não há
+mídia inserida — é ausência de cartão, não erro de rede.
+
 Para carregar pelo pendant depois de transferir:
 
 ```
-MENU → FILE → F1 [UTIL] → Set Device → escolha o dispositivo → LOAD
+MENU → FILE → F1 [UTIL] → Set Device → FROM Disk → LOAD
 ```
 
 Sem rede, dá para fazer o mesmo por cartão de memória ou pendrive, e é o
 caminho mais curto se a célula não tiver ponto de rede.
+
+Verificado em 11/09/2026 contra o controlador do laboratório, um R-30iA
+Mate `LR V7.70P/31`: o arquivo subiu para `FR:` e voltou por `RETR` byte a
+byte idêntico ao original.
 
 ### O `.LS` precisa virar `.TP`
 
@@ -92,6 +123,78 @@ resultante.
 
 Para saber se a opção existe: `MENU` → `NEXT` → `STATUS` → `F1 [TYPE]` →
 `Version ID` → `F3 [ORDER FI]`, e procure R507 na lista.
+
+### Quais opções este controlador tem
+
+Isso decide o que dá e o que não dá para fazer, e não precisa de pendant:
+o controlador guarda a lista num arquivo e o FTP entrega.
+
+```
+ftp 192.168.0.20
+cd mdb:
+get orderfil.dat
+```
+
+No robô do laboratório (`F125612`, `LR HandlingTool V7.7069`) são 18:
+
+```
+H551  LR HandlingTool        R650  FRA Params
+H521  English Dictionary     R694  Jog in Auto Mode
+R534  Collision Guard        R652  PMC Change Mode
+R663  Constant Path          J760  PMC (FAPT Ladder)
+J753  DeviceNet Interface    J669  Payload Ident.
+J754  DeviceNet (Slave)      J878  Payload confirm
+R659  Ethernet Sniffer       J957  USB port on iPendant
+R540  EthernetIP I/O scan    H809  LR Mate 200iC
+J547  RIA
+```
+
+**O que falta importa mais que o que tem.** Quatro ausências definem o
+projeto:
+
+| Opção | Serviria para | Consequência de não ter |
+|---|---|---|
+| `R507` ASCII Upload | compilar `.LS` no controlador | o pendant responde **"not loadable"**; o `.LS` precisa virar `.TP` no PC |
+| `R632` KAREL | rodar programa próprio no controlador | sem servidor de movimento embarcado |
+| `R648` User Socket Messaging | abrir socket TCP de dentro do robô | idem |
+| `R641` PC Interface | ler e escrever dados do PC | sem canal de dados oficial |
+
+Sem `R632` e `R648`, o driver do **ROS-Industrial não roda neste robô** —
+ele funciona instalando um servidor KAREL no controlador. É a razão
+concreta de não existir aqui um equivalente ao `pendant_real.py` do UR5.
+
+O `R540 EthernetIP I/O scan` põe o robô como **scanner**, não como
+adapter: ele varre outros dispositivos, em vez de ser varrido. Dá para
+imaginar um PC fazendo de adapter e alimentando os `UI[1..8]` do UOP por
+ali, e tecnicamente fecha — mas isso tira a pessoa do circuito de partida,
+e essa decisão é do responsável pela célula, não do programa.
+
+### Ver o robô ao vivo
+
+O controlador gera diagnósticos sob demanda no `MD:` e serve todos por
+FTP. Cada leitura custa ~50 ms, então dá para acompanhar o robô em tempo
+quase real:
+
+```
+python monitor_fanuc.py 192.168.0.20
+```
+
+| Arquivo | O que traz |
+|---|---|
+| `sftysig.dg` | `TP Enable`, `TP Deadman`, E-stops, `Fence Open`, `OverTravel` |
+| `curpos.dg` | as seis juntas, XYZWPR no UFRAME ativo e no mundo, `CFG`, UTOOL e UFRAME ativos |
+| `prgstate.dg` | estado de cada tarefa |
+
+**Isto corrige o que este README dizia antes.** Está escrito adiante que o
+R-30iA "não publica posição": ele publica, por este caminho, somente
+leitura. O que continua verdade é o resto — não existe jog remoto nem
+comando de movimento, e a tela do navegador segue mostrando pose simulada
+enquanto não for ligada a esta fonte.
+
+Duas coisas **não** aparecem em diagnóstico nenhum: a tecla `SHIFT` e as
+teclas de jog. O deadman aparece porque é sinal de segurança. Para o jog,
+o `monitor_fanuc.py` infere: compara as juntas entre duas leituras e diz
+qual eixo gira e para que lado. É o efeito da tecla, não a tecla.
 
 ### O que a rede NÃO resolve
 
@@ -112,8 +215,21 @@ python pendant_fanuc.py      seguido de     python twin3d_fanuc.py
 ```
 
 O pendant publica a pose das juntas em UDP na `127.0.0.1:47101` e o twin
-desenha. É tudo local, não sai da máquina, e o robô real não é tocado: o
-R-30iA não tem interface aberta de jog nem de stream de posição.
+desenha. É tudo local, não sai da máquina, e o robô real não é tocado.
+
+Para o twin seguir o **robô de verdade**, em vez do pendant simulado:
+
+```
+python twin3d_fanuc.py --robo 192.168.0.20
+```
+
+Ele lê o `curpos.dg` por FTP a ~10 Hz, numa thread separada para não travar
+o desenho. Não é a 30003 do UR5 — lá são 125 Hz de stream empurrado, aqui é
+polling de arquivo, e a diferença aparece em movimento rápido. Para
+conferir pose, alcance e caminho, serve.
+
+O sentido contrário continua não existindo: jog remoto e comando de
+movimento exigiriam `R632`, `R648` ou `R641`, e nenhuma está instalada.
 
 Ou as duas numa janela só, sem UDP no meio:
 
@@ -182,19 +298,60 @@ python servidor_fanuc.py --robo 192.168.0.20
 
 **Aqui "conectado" quer dizer menos do que no UR5, e a tela diz isso.** No
 UR5 dá para perguntar ao dashboard se o robô pode mover, e a resposta é
-sobre o robô. O R-30iA não tem canal equivalente: não publica posição, não
-aceita jog, e o estado de programa só existe pelos sinais UOP, que são I/O
-físico. O que dá para saber daqui é se o **controlador responde na rede**, e
-nada sobre a pose dele.
+sobre o robô. O R-30iA não aceita jog remoto e o estado de programa só
+existe pelos sinais UOP, que são I/O físico. O que a pílula responde é se o
+**controlador responde na rede**.
 
-Por isso o rótulo é `CONTROLADOR NA REDE` e não `CONECTADO`, e o detalhe
-repete que a pose na tela continua simulada. Verde aqui não significa que o
-3D está mostrando o robô de verdade — significa que dá para mandar o `.LS`
-por FTP, que é a pergunta que o fluxo offline faz de verdade.
+Por isso o rótulo é `CONTROLADOR NA REDE` e não `CONECTADO`: verde significa
+que dá para mandar o `.LS` por FTP, que é a pergunta que o fluxo offline faz
+de verdade.
+
+A pose mostrada na página **continua simulada**, e essa é uma escolha que
+ficou por fazer, não um limite: desde que se descobriu o `curpos.dg`, existe
+a fonte real, e o `twin3d_fanuc.py --robo` já a usa. Ligar o servidor web à
+mesma fonte é o passo que falta para a página deixar de mentir.
 
 São duas portas porque falham por motivos diferentes: a 21 é o FTP, por onde
 o `.LS` sobe, e a 80 é o servidor web do iPendant, que pode estar
 desabilitado nas opções sem que a rede tenha problema algum.
+
+### A página seguindo o robô real
+
+```
+python servidor_fanuc.py --robo 192.168.0.20 --espelhar
+```
+
+Com `--espelhar` a pose que desce para a página vem do `curpos.dg` do
+controlador, não da cinemática do Python. A pílula passa a dizer
+`SEGUINDO O ROBÔ`, e o jog da página é recusado com um aviso — em espelho
+a tela reflete, não comanda.
+
+Sem `--espelhar`, o `--robo` sozinho continua fazendo o de antes: vigia o
+enlace e mostra `CONTROLADOR NA REDE`, com a pose simulada.
+
+### O FTP aceita duas sessões, e só
+
+Esta é a restrição que define como os programas se arranjam. O servidor
+FTP do R-30iA aceita **duas conexões simultâneas**. A terceira é recusada
+sem mensagem nenhuma: a conexão simplesmente não abre.
+
+O sintoma é traiçoeiro. Nada dá erro na tela — a pose fica parada em zero
+e parece simulação normal. Foi o que aconteceu ao rodar servidor, twin e
+monitor, cada um abrindo a sua.
+
+O arranjo que cabe no orçamento é **um leitor só, e o resto por UDP**:
+
+```
+python servidor_fanuc.py --robo 192.168.0.20 --espelhar   1 conexão FTP
+python monitor_gui_fanuc.py                               1 conexão FTP
+python twin3d_fanuc.py                 sem --robo: segue o UDP do servidor
+```
+
+São dois, que é o teto. O `twin3d_fanuc.py --robo` abre a sua própria e
+serve para rodar **sozinho**, sem o servidor — os dois juntos estouram.
+
+E sobra zero para um `put` manual: para mandar um `.LS` por FTP, feche um
+dos leitores antes.
 
 ### Se o 3D ficar em "carregando malhas do CAD..." para sempre
 

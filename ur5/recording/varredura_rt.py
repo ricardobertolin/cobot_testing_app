@@ -31,12 +31,21 @@ Roteiro recomendado no laboratorio (15 min):
 import argparse
 import csv
 import math
+import os
 import socket
 import struct
 import sys
 import time
 
-from ur5_comum import (
+# O ur5_comum.py fica na pasta de cima. Sem isto, rodar
+# "python recording/varredura_rt.py" de dentro da pasta ur5 falha no import,
+# porque o Python poe no path a pasta do SCRIPT, nao a de trabalho.
+_AQUI = os.path.dirname(os.path.abspath(__file__))
+_PAI = os.path.dirname(_AQUI)
+if _PAI not in sys.path:
+    sys.path.insert(0, _PAI)
+
+from ur5_comum import (  # noqa: E402
     UR_IP, PORTA_REALTIME, enviar_script, verificar_pronto,
 )
 

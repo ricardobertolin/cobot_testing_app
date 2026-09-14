@@ -2,25 +2,26 @@
 Digital twin do FANUC LR Mate 200iC: o robo do CAD desenhado na pose, ao vivo.
 
     python twin3d_fanuc.py                segue o pendant_fanuc.py
+    python twin3d_fanuc.py --robo IP      segue o robo REAL, por FTP
     python twin3d_fanuc.py --sliders      seis sliders na propria janela
     python twin3d_fanuc.py --demo         varre as juntas sozinho
     python twin3d_fanuc.py --preparar     so gera o cache de malhas do CAD
 
-POR QUE NAO TEM MODO "SEGUIR O ROBO REAL"
+SEGUIR O ROBO REAL
 
-No UR5 existe: a interface real-time da 30003 entrega as seis juntas a
-125 Hz sem instalar nada no controlador. O R-30iA nao tem equivalente
-aberto. As opcoes seriam:
+Da, e sem opcao comprada nenhuma. O controlador gera diagnosticos sob
+demanda no device MD: e serve todos por FTP anonimo. O curpos.dg traz as
+seis juntas na mesma convencao do pendant, e cada leitura custa ~50 ms,
+o que da uns 10 Hz de folga.
 
-  - um programa KAREL residente abrindo socket e publicando a posicao,
-    que exige a opcao KAREL no controlador;
-  - EtherNet/IP com o PC como scanner, mapeando a posicao em registradores;
-  - o servidor web do controlador, que serve pagina de diagnostico mas nao
-    stream continuo.
+Nao e a 30003 do UR5: la sao 125 Hz de stream empurrado, aqui e polling
+de arquivo, e a diferenca aparece em movimento rapido. Para conferir
+pose, alcance e caminho, serve.
 
-Nenhuma delas e "so conectar", e todas dependem de opcao comprada. Enquanto
-isso, esta janela segue o pendant simulado, que e o que da para fazer offline
-e ja serve para conferir alcance, pose e caminho antes de gerar o .LS.
+O que continua nao existindo e o sentido contrario. Jog remoto e comando
+de movimento exigiriam KAREL (R632), Socket Messaging (R648) ou PC
+Interface (R641), e nenhuma esta instalada neste robo -- confirmado no
+MDB:/orderfil.dat. Esta janela le, e so.
 
 A cinematica vem do modelo_fanuc.py, com as cotas conferidas contra o
 desenho dimensional do catalogo, e as malhas sao as pecas de CAD do robo.
@@ -31,11 +32,13 @@ import math
 import socket
 import struct
 import sys
+import threading
 import time
 
 import numpy as np
 
 import modelo_fanuc as mod
+import monitor_fanuc as mon
 
 
 # Porta local em que o pendant_fanuc.py publica a pose de juntas.
@@ -86,6 +89,62 @@ class FontePendant:
 
     def fechar(self):
         self.sock.close()
+
+
+class FonteRobo:
+    """
+    Segue o robo real, lendo o curpos.dg por FTP numa thread.
+
+    A leitura fica fora da thread da interface de proposito: 50 ms de FTP
+    dentro do laco de desenho travariam a janela a cada quadro. A thread
+    guarda a ultima pose lida e o desenho pega o que estiver la, que e o
+    mesmo contrato do UDP do pendant.
+
+    As juntas vem na convencao do pendant, entao vao direto para o modelo,
+    que aplica o acoplamento J2-J3 por conta propria.
+    """
+
+    nome = "robo real"
+
+    def __init__(self, ip, hz=10.0):
+        self.ip = ip
+        self.intervalo = 1.0 / max(1.0, hz)
+        self.q = [0.0] * 6
+        self.recebeu = False
+        self.erro = None
+        self._parar = threading.Event()
+        self._thread = threading.Thread(target=self._laco, daemon=True)
+        self._thread.start()
+
+    def _laco(self):
+        robo = mon.Controlador(self.ip)
+        while not self._parar.is_set():
+            inicio = time.monotonic()
+            pos = mon.ler_posicao(robo.ler("curpos.dg"))
+            if pos is not None:
+                self.q = [math.radians(v) for v in pos["juntas"]]
+                self.recebeu = True
+                self.erro = None
+            else:
+                self.erro = robo.erro
+            resto = self.intervalo - (time.monotonic() - inicio)
+            if resto > 0:
+                self._parar.wait(resto)
+        robo.fechar()
+
+    def ler(self):
+        return self.q
+
+    def estado(self):
+        if self.recebeu and self.erro is None:
+            return f"robo real {self.ip}"
+        if self.erro:
+            return f"sem leitura: {self.erro[:40]}"
+        return f"conectando em {self.ip}..."
+
+    def fechar(self):
+        self._parar.set()
+        self._thread.join(timeout=1.0)
 
 
 class FonteDemo:
@@ -291,6 +350,8 @@ def main():
                             help="controlar as juntas pela propria janela")
     analisador.add_argument("--demo", action="store_true",
                             help="varrer as juntas sozinho")
+    analisador.add_argument("--robo", metavar="IP",
+                            help="seguir o robo real neste endereco, por FTP")
     analisador.add_argument("--porta", type=int, default=PORTA_PENDANT,
                             help="porta UDP do pendant")
     analisador.add_argument("--sem-rastro", action="store_true",
@@ -311,7 +372,9 @@ def main():
             print(erro)
             return 1
 
-    if opcoes.demo:
+    if opcoes.robo:
+        fonte = FonteRobo(opcoes.robo)
+    elif opcoes.demo:
         fonte = FonteDemo()
     elif opcoes.sliders:
         fonte = FonteSliders()

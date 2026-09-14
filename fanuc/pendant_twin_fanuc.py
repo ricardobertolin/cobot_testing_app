@@ -37,13 +37,17 @@ Uso:
     python pendant_twin_fanuc.py
 """
 
+import argparse
 import math
 import sys
+import threading
+import time
 import tkinter as tk
 
 import numpy as np
 
 import modelo_fanuc as mod
+import monitor_fanuc as mon
 from pendant_fanuc import FUNDO, Pendant
 
 try:
@@ -224,10 +228,55 @@ class Cena3D:
 # JANELA
 # ============================================================
 
+class EspelhoRobo:
+    """
+    Le a pose real por FTP, numa thread. Mesma fonte do monitor_fanuc.py.
+
+    Lembrete de orcamento: o FTP do R-30iA aceita duas sessoes. Esta e uma
+    delas.
+    """
+
+    def __init__(self, ip, hz=5.0):
+        self.ip = ip
+        self.intervalo = 1.0 / max(0.5, hz)
+        self.q = [0.0] * 6
+        self.recebeu = False
+        self.erro = None
+        self._parar = threading.Event()
+        self._thread = threading.Thread(target=self._laco, daemon=True)
+        self._thread.start()
+
+    def _laco(self):
+        robo = mon.Controlador(self.ip)
+        while not self._parar.is_set():
+            inicio = time.monotonic()
+            pos = mon.ler_posicao(robo.ler("curpos.dg"))
+            if pos is not None:
+                self.q = [math.radians(v) for v in pos["juntas"]]
+                self.recebeu = True
+                self.erro = None
+            else:
+                self.erro = robo.erro
+            resto = self.intervalo - (time.monotonic() - inicio)
+            if resto > 0:
+                self._parar.wait(resto)
+        robo.fechar()
+
+    def fechar(self):
+        self._parar.set()
+        self._thread.join(timeout=1.5)
+
+
 class PendantTwin(Pendant):
 
+    def __init__(self, espelho=None):
+        self.espelho = espelho
+        super().__init__()
+
     def _montar_tela(self):
-        self.title("FANUC iPendant + twin - LR Mate 200iC (simulador)")
+        self.title("FANUC iPendant + twin - LR Mate 200iC (%s)"
+                   % ("SEGUINDO O ROBO" if self.espelho is not None
+                      else "simulador"))
         self.resizable(True, True)
         self.minsize(780, 540)
 
@@ -313,6 +362,13 @@ class PendantTwin(Pendant):
         self.tela3d.itemconfig(self.item3d, image=self.foto)
 
     def _atualizar(self):
+        # Em espelho a pose vem do robo e sobrescreve o que o jog local
+        # tiver feito. Os botoes continuam clicaveis de proposito: o valor
+        # volta no quadro seguinte, e ver isso acontecer explica melhor que
+        # qualquer aviso por que esta janela nao comanda nada.
+        if self.espelho is not None and self.espelho.recebeu:
+            self.q = list(self.espelho.q)
+
         # So redesenha quando a pose mudou de verdade. Parado, o laco de
         # 33 ms fica praticamente de graca em vez de renderizar 30 quadros
         # identicos por segundo.
@@ -327,13 +383,34 @@ class PendantTwin(Pendant):
 
 
 def main():
+    analisador = argparse.ArgumentParser(
+        description="pendant e twin do LR Mate 200iC na mesma janela")
+    analisador.add_argument("--robo", metavar="IP",
+                            help="seguir a pose do robo real, lida do "
+                                 "curpos.dg por FTP. Leitura apenas: os "
+                                 "botoes continuam sem mover o robo.")
+    opcoes = analisador.parse_args()
+
     if not mod.cache_existe():
         sys.exit("cache de malhas ausente.\n"
                  "Rode: python modelo_fanuc.py --preparar\n"
                  "ou, se o que voce tem e um STEP de montagem:\n"
                  "     python preparar_cad_step.py LR_Mate_200iC.STEP")
 
-    PendantTwin().mainloop()
+    espelho = EspelhoRobo(opcoes.robo) if opcoes.robo else None
+    if espelho is not None:
+        time.sleep(1.5)
+        if not espelho.recebeu:
+            print("espelho: sem leitura de %s -- %s"
+                  % (opcoes.robo, espelho.erro or "sem resposta"))
+            print("o FTP do R-30iA aceita 2 sessoes: feche os outros "
+                  "leitores e tente de novo")
+
+    try:
+        PendantTwin(espelho).mainloop()
+    finally:
+        if espelho is not None:
+            espelho.fechar()
     return 0
 
 

@@ -44,11 +44,15 @@ O mesmo do pendant_fanuc.py: o R-30iA nao tem interface aberta de jog nem
 de stream de posicao, e jog de verdade precisa do dispositivo de
 habilitacao de tres posicoes, que uma pagina web nao tem.
 
-E por isso que aqui nao existe o --espelhar nem o --comandar que o
-servidor_ur5.py tem. Nao e simetria faltando por descuido: no UR5 os dois
-modos existem porque a 30003 entrega posicao a 125 Hz e a 30002 aceita
-URScript. Deste lado nao ha nem uma coisa nem outra, e um --espelhar de
-FANUC teria que ler de um canal que nao existe.
+O --comandar do servidor_ur5.py continua sem equivalente aqui, e nao por
+descuido: mover exige KAREL (R632), Socket Messaging (R648) ou PC
+Interface (R641), e nenhuma esta instalada neste robo.
+
+O --espelhar existe, por um caminho que nao e o do UR5. La e a 30003
+empurrando 125 Hz. Aqui o controlador gera o curpos.dg sob demanda no
+MD: e serve por FTP anonimo: polling de arquivo a ~5 Hz, com as seis
+juntas na convencao do pendant. Menos fluido, e o suficiente para a
+pagina mostrar o robo de verdade em vez de simulacao.
 
 O /pendant_dt e o mesmo arquivo servido pelo UR5, e e o pendant_twin.py de
 desktop levado para o navegador: a tela e o 3D na mesma pagina, que e o
@@ -70,6 +74,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 
 import modelo_fanuc as mod
+import monitor_fanuc as mon
 # O pendant de desktop e a fonte das constantes de jog e das poses guardadas.
 # Importar nao abre janela nenhuma: a janela so nasce em main().
 import pendant_fanuc as pend
@@ -150,11 +155,26 @@ class Vigia:
         self.parar.set()
 
 
-def situacao(vigia):
+def situacao(vigia, espelho=None):
     """
     O que a tela mostra sobre o enlace. Ver o cabecalho do Vigia para o que
     "conectado" significa deste lado.
+
+    Em espelho o rotulo muda: nao e mais so "o controlador responde", e a
+    pose na tela vem dele.
     """
+    if espelho is not None and espelho.recebeu:
+        return {"modo": "espelho", "nivel": "ok", "rotulo": "SEGUINDO O ROBO",
+                "detalhe": f"pose lida de {espelho.ip} pelo curpos.dg, por "
+                           f"FTP. Leitura apenas: a pagina nao move o robo."}
+
+    if espelho is not None:
+        return {"modo": "espelho", "nivel": "erro", "rotulo": "SEM LEITURA",
+                "detalhe": f"espelho pedido, mas {espelho.ip} nao entregou "
+                           f"pose ({espelho.erro or 'sem resposta'}). O FTP "
+                           f"do R-30iA aceita 2 sessoes: feche os outros "
+                           f"leitores."}
+
     if vigia is None:
         return {"modo": "simulacao", "nivel": "neutro", "rotulo": "SIMULACAO",
                 "detalhe": "nenhum controlador envolvido: a pose sai da "
@@ -182,13 +202,69 @@ def situacao(vigia):
 # ESTADO
 # ============================================================
 
+class EspelhoRobo:
+    """
+    Le a pose real do controlador por FTP, numa thread.
+
+    Mesma fonte do monitor_fanuc.py. Fica em thread propria porque 50 ms
+    de FTP dentro do laco de 30 Hz da simulacao atrasariam tudo o que a
+    pagina recebe.
+
+    DUAS CONEXOES, NAO MAIS
+
+    O servidor FTP do R-30iA aceita duas sessoes simultaneas. A terceira
+    e recusada sem mensagem: a conexao simplesmente nao abre. Entao nao
+    adianta cada programa abrir a sua.
+
+    O arranjo que cabe no orcamento e um leitor so, e o resto por UDP:
+
+      servidor_fanuc.py --robo IP --espelhar   1 conexao, publica em UDP
+      monitor_gui_fanuc.py                     1 conexao (sinais de seguranca)
+      twin3d_fanuc.py            sem --robo, segue o UDP deste servidor
+
+    Isso da dois, que e o teto. Rodar o twin com --robo junto estoura, e
+    o sintoma e pose parada em zero em vez de erro.
+    """
+
+    def __init__(self, ip, hz=5.0):
+        self.ip = ip
+        self.intervalo = 1.0 / max(0.5, hz)
+        self.q = [0.0] * 6
+        self.recebeu = False
+        self.erro = None
+        self._parar = threading.Event()
+        self._thread = threading.Thread(target=self._laco, daemon=True)
+        self._thread.start()
+
+    def _laco(self):
+        robo = mon.Controlador(self.ip)
+        while not self._parar.is_set():
+            inicio = time.monotonic()
+            pos = mon.ler_posicao(robo.ler("curpos.dg"))
+            if pos is not None:
+                self.q = [math.radians(v) for v in pos["juntas"]]
+                self.recebeu = True
+                self.erro = None
+            else:
+                self.erro = robo.erro
+            resto = self.intervalo - (time.monotonic() - inicio)
+            if resto > 0:
+                self._parar.wait(resto)
+        robo.fechar()
+
+    def fechar(self):
+        self._parar.set()
+        self._thread.join(timeout=1.5)
+
+
 class Estado:
     """
     A pose e o que a cerca, com trava. E o unico dado mutavel do processo:
     a thread da simulacao escreve, as threads de HTTP leem.
     """
 
-    def __init__(self, vigia=None):
+    def __init__(self, vigia=None, espelho=None):
+        self.espelho = espelho
         self.trava = threading.Lock()
         self.q = [0.0] * 6
         self.jog = None
@@ -209,6 +285,14 @@ class Estado:
 
     def comandar(self, pedido):
         acao = pedido.get("acao")
+
+        # Em espelho a pose vem do robo. Aceitar jog aqui faria a tela
+        # discordar do robo por um instante e voltar sozinha no quadro
+        # seguinte, que e pior do que nao aceitar.
+        if self.espelho is not None and acao in ("jog", "pose", "reset"):
+            with self.trava:
+                self._avisar("modo espelho: a pagina nao move o robo")
+            return
 
         with self.trava:
             if acao == "jog":
@@ -244,6 +328,11 @@ class Estado:
     # -------- simulacao --------
 
     def passo(self, dt):
+        if self.espelho is not None:
+            with self.trava:
+                self.q = list(self.espelho.q)
+            return
+
         with self.trava:
             if self.jog is None or self.falha:
                 return
@@ -326,7 +415,7 @@ class Estado:
             "mensagem": mensagem,
             "sigma": round(menor, 4),
             "avisos": mod.dentro_dos_limites(graus),
-            "robo": situacao(self.vigia),
+            "robo": situacao(self.vigia, self.espelho),
         }
 
 
@@ -372,7 +461,7 @@ def empacotar_malhas():
     return blobs
 
 
-def configuracao():
+def configuracao(espelho=False):
     """Tudo que a pagina precisa saber sobre este robo."""
     return {
         "robo": "LR Mate 200iC",
@@ -404,9 +493,10 @@ def configuracao():
         # O RESET do pendant, que limpa o FAULT. Nao e pose nem jog, entao
         # entra como acao, no mesmo campo que o UR5 usa para PARAR e INICIO.
         "acoes": [{"id": "reset", "texto": "RESET", "cor": "#d8c27a"}],
-        "aviso": "",
+        "aviso": ("pose lida do robo real; a pagina nao move nada"
+                  if espelho else ""),
         "comanda": False,
-        "espelho": False,
+        "espelho": espelho,
         "elos": [{"nome": nome, "cor": list(cor)}
                  for nome, _, cor in mod.ELOS],
         "camera": {"raio": 2.0, "alvo": [0.15, 0.0, 0.4],
@@ -570,8 +660,10 @@ def main():
                             help="0.0.0.0 atende a rede, 127.0.0.1 so a maquina")
     analisador.add_argument("--robo", metavar="IP",
                             help="vigiar o enlace: a tela mostra se o "
-                                 "controlador responde na rede (FTP e web). "
-                                 "Nao le posicao, que o R-30iA nao publica.")
+                                 "controlador responde na rede (FTP e web).")
+    analisador.add_argument("--espelhar", action="store_true",
+                            help="a pose vem do robo real, lida do "
+                                 "curpos.dg por FTP. Exige --robo.")
     opcoes = analisador.parse_args()
 
     if not mod.cache_existe():
@@ -582,13 +674,30 @@ def main():
             print(erro)
             return 1
 
+    if opcoes.espelhar and not opcoes.robo:
+        print("--espelhar precisa de --robo IP: e de la que a pose vem")
+        return 1
+
     vigia = Vigia(opcoes.robo) if opcoes.robo else None
+    espelho = EspelhoRobo(opcoes.robo) if opcoes.espelhar else None
+
+    if espelho is not None:
+        # Falhar calado aqui e caro: a pagina mostraria pose zerada e
+        # pareceria simulacao normal. Vale esperar a primeira leitura.
+        time.sleep(1.5)
+        if not espelho.recebeu:
+            print("espelho: sem leitura de %s -- %s"
+                  % (opcoes.robo, espelho.erro or "sem resposta"))
+            print("o FTP do R-30iA aceita 2 sessoes: feche os outros "
+                  "leitores (twin --robo, monitor) e tente de novo")
+        else:
+            print("espelho: lendo a pose real de %s" % opcoes.robo)
 
     servidor = ThreadingHTTPServer((opcoes.host, opcoes.porta), Manipulador)
     servidor.daemon_threads = True
-    servidor.estado = Estado(vigia)
+    servidor.estado = Estado(vigia, espelho)
     servidor.malhas = empacotar_malhas()
-    servidor.configuracao = configuracao()
+    servidor.configuracao = configuracao(bool(espelho))
     servidor.parar = threading.Event()
 
     threading.Thread(target=laco, args=(servidor.estado, servidor.parar),

@@ -1,0 +1,25 @@
+# Experimento da senoide no UR5 (pasta ur5/recording).
+# Testado em Windows 10, Python 3.13.0, em 2026-09-14/15.
+#
+#   pip install -r requirements.txt
+#
+# O ur5_comum.py e os scripts de gravacao do robo so usam a biblioteca padrao.
+# O resto e camera, analise e graficos.
+
+# Camera Intel RealSense D435i (gravar_video.py, ver_camera.py, extrair_frames.py).
+# A partir da 2.57 o SDK grava em .db3 (rosbag2), nao mais em .bag.
+pyrealsense2==2.58.4.10922
+
+# Analise e graficos
+numpy==2.2.4
+matplotlib==3.10.1
+pandas==2.2.3
+pillow==11.1.0
+
+# Imagem, ArUco e sincronizacao (ver_camera.py, verificar_sync.py, gerar_aruco_a4.py)
+opencv-python==5.0.0.93
+
+# Notebook da sessao (gerar_notebook_sessao.py)
+nbformat==5.11.1
+nbclient==0.11.0
+ipykernel==7.3.0

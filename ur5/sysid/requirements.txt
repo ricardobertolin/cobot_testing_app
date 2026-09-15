@@ -1,0 +1,11 @@
+# Pipeline de identificacao (ur5/sysid). Testado com Python 3.13.0.
+#
+#   pip install -r requirements.txt
+#
+# Nao precisa de GPU: o torch CPU basta para o NARX MLP.
+
+numpy==2.2.4
+scipy==1.17.1
+matplotlib==3.10.1
+casadi==3.8.0
+torch==2.13.0

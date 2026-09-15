@@ -52,8 +52,12 @@ def marcar_led(ax, bordas):
 
 
 def rotulo_take(meta):
-    return (f"{meta['take']}  |  J1: A = {meta['amplitude_graus']:.0f} graus, "
-            f"f = {meta['freq_hz']} Hz, T = {meta['duracao_senoide_s']:.0f} s")
+    # Takes do gravacao_senoide_juntas.py trazem a lista "juntas".
+    juntas = meta.get("juntas") or [{"junta": 1, "amplitude_graus": meta["amplitude_graus"],
+                                     "freq_hz": meta["freq_hz"]}]
+    partes = [f"J{j['junta']}: A = {j['amplitude_graus']:.0f} graus, f = {j['freq_hz']} Hz"
+              for j in juntas]
+    return f"{meta['take']}  |  " + "; ".join(partes) + f", T = {meta['duracao_senoide_s']:.0f} s"
 
 
 def grafico_j1(pasta, t, dados, meta, bordas):

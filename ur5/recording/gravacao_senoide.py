@@ -30,7 +30,10 @@ Uso:
     python gravacao_senoide.py --take take_03_A20_f010_e1 --amplitude 20 --freq 0.10
     python gravacao_senoide.py --take take_05_A20_f020_e1 --amplitude 20 --freq 0.20
 
-    opcoes: --duracao 60  --pasta sessao_XX  --do 0  --di 0  --sem-led  --ip
+    opcoes: --duracao 60  --pasta sessions/sessao_XX  --do 0  --di 0  --sem-led  --ip
+
+Sem --pasta, o take vai para recording/sessions/sessao_AAAAMMDD/<take>/, a mesma
+pasta em que o gravar_video.py grava o video do take.
 
 Protocolo: iniciar a gravacao do video ANTES de responder ao prompt deste
 script. O script pergunta antes de mandar o robo se mover.
@@ -57,6 +60,15 @@ _PAI = os.path.dirname(_AQUI)
 if _PAI not in sys.path:
     sys.path.insert(0, _PAI)
 
+# Toda saida gravada vai para recording/sessions/, que o .gitignore ignora,
+# independente de onde o script foi chamado. Sem --pasta, a sessao e a do dia.
+PASTA_SESSOES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sessions")
+
+
+def pasta_sessao_padrao():
+    return os.path.join(PASTA_SESSOES, f"sessao_{time.strftime('%Y%m%d')}")
+
+
 from ur5_comum import (  # noqa: E402
     UR_IP, PORTA_REALTIME, LIMITE_JUNTA,
     enviar_script, verificar_pronto, ler_estado,
@@ -75,7 +87,8 @@ INDICES_CANDIDATOS = {
     "Ialvo": 19,   # corrente alvo do controlador
     "Malvo": 25,   # torque alvo do controlador
     "I": 43,       # corrente atual (o proxy de torque pedido)
-    "Ictrl": 49,   # corrente de controle
+    "Ictrl": 49,   # na verdade acelerometro da ferramenta (49..51) no 1.8;
+                   # o nome fica para nao quebrar as colunas dos takes gravados
 }
 IDX_TEMP = 86
 
@@ -246,7 +259,8 @@ def main():
     parser.add_argument("--amplitude", type=float, default=20.0, help="graus")
     parser.add_argument("--freq", type=float, default=0.10, help="Hz")
     parser.add_argument("--duracao", type=float, default=60.0, help="s de senoide")
-    parser.add_argument("--pasta", default=".", help="pasta da sessao")
+    parser.add_argument("--pasta", default=None,
+                        help="pasta da sessao (padrao: sessions/sessao_AAAAMMDD)")
     parser.add_argument("--do", dest="saida_do", type=int, default=0,
                         help="saida digital do pulso de LED (padrao DO0)")
     parser.add_argument("--di", dest="entrada_di", type=int, default=0,
@@ -308,11 +322,13 @@ def main():
         sys.exit(1)
 
     # ---- pasta do take
-    pasta_take = os.path.join(args.pasta, take)
-    if os.path.exists(pasta_take):
-        print(f"a pasta {pasta_take} ja existe, escolha outro nome de take")
+    # A pasta pode ja existir: o gravar_video.py, iniciado antes, cria a mesma
+    # pasta do take para o video. O que nao pode existir e um log anterior.
+    pasta_take = os.path.join(args.pasta or pasta_sessao_padrao(), take)
+    if os.path.exists(os.path.join(pasta_take, "robo.csv")):
+        print(f"ja existe um robo.csv em {pasta_take}, escolha outro nome de take")
         sys.exit(1)
-    os.makedirs(pasta_take)
+    os.makedirs(pasta_take, exist_ok=True)
 
     com_led = not args.sem_led
     script = montar_script(amplitude, freq, duracao, args.saida_do, com_led)
@@ -342,7 +358,8 @@ def main():
     )
     resposta = input("digite INICIAR para mandar o movimento: ").strip()
     if resposta != "INICIAR":
-        os.rmdir(pasta_take) if not os.listdir(pasta_take) else None
+        if not os.listdir(pasta_take):
+            os.rmdir(pasta_take)
         print("cancelado")
         sys.exit(0)
 

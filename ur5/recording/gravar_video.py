@@ -10,12 +10,16 @@ quebra a hipotese de amostragem uniforme.
 
 Uso tipico no dia (iniciar o video ANTES do gravacao_senoide.py):
 
-    python gravar_video.py --take take_01_A20_f005_e1 --pasta sessao_XX
+    python gravar_video.py --take take_01_A20_f005_e1
+    python gravar_video.py --take take_01_A20_f005_e1 --pasta sessions/sessao_XX
     python gravar_video.py --take ensaio --duracao 30
     python gravar_video.py --take teste --duracao 0        ate Ctrl+C
 
 A duracao padrao (80 s) cobre o take de 60 s mais claquetes, pulsos de
-LED e folga. Requer: pip install pyrealsense2
+LED e folga. Sem --pasta, grava em recording/sessions/sessao_AAAAMMDD/<take>/,
+a mesma pasta do take que o gravacao_senoide.py usa.
+
+Requer: pip install pyrealsense2
 """
 
 import argparse
@@ -37,6 +41,16 @@ FPS = 60
 # Precisa ser menor que o periodo do quadro (166 a 60 fps).
 EXPOSICAO_PADRAO = 78
 
+ARQUIVO_VIDEO = "video.db3"
+
+# Toda saida gravada vai para recording/sessions/, que o .gitignore ignora,
+# independente de onde o script foi chamado. Sem --pasta, a sessao e a do dia.
+PASTA_SESSOES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sessions")
+
+
+def pasta_sessao_padrao():
+    return os.path.join(PASTA_SESSOES, f"sessao_{time.strftime('%Y%m%d')}")
+
 
 def configurar_sensor_rgb(dispositivo, exposicao):
     """Desliga auto-exposure e auto-white-balance e fixa a exposicao."""
@@ -56,8 +70,8 @@ def main():
         description="grava video da D435i em .bag com exposicao fixa")
     parser.add_argument("--take", required=True,
                         help="nome do take, vira o nome da pasta")
-    parser.add_argument("--pasta", default=".",
-                        help="pasta da sessao (padrao: atual)")
+    parser.add_argument("--pasta", default=None,
+                        help="pasta da sessao (padrao: sessions/sessao_AAAAMMDD)")
     parser.add_argument("--duracao", type=float, default=80.0,
                         help="segundos de gravacao, 0 = ate Ctrl+C (padrao 80)")
     parser.add_argument("--fps", type=int, default=FPS)
@@ -69,8 +83,10 @@ def main():
                         help="grava tambem o stream de profundidade")
     args = parser.parse_args()
 
-    pasta_take = os.path.join(args.pasta, args.take)
-    caminho_bag = os.path.join(pasta_take, "video.bag")
+    pasta_take = os.path.join(args.pasta or pasta_sessao_padrao(), args.take)
+    # O librealsense 2.57+ grava em rosbag2 (.db3) e recusa .bag no
+    # enable_record_to_file. O timestamp de hardware por quadro continua la.
+    caminho_bag = os.path.join(pasta_take, ARQUIVO_VIDEO)
     if os.path.exists(caminho_bag):
         sys.exit(f"ja existe {caminho_bag}, escolha outro take ou apague antes")
     os.makedirs(pasta_take, exist_ok=True)
@@ -127,7 +143,7 @@ def main():
 
     meta = {
         "take": args.take,
-        "arquivo": "video.bag",
+        "arquivo": ARQUIVO_VIDEO,
         "t_inicio_mono": t_inicio_mono,
         "t_inicio_wall": t_inicio_wall,
         "duracao_s": decorrido,

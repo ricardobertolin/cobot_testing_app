@@ -79,15 +79,18 @@ if _PAI not in sys.path:
 
 from ur5_comum import UR_IP, PORTA_REALTIME, verificar_pronto  # noqa: E402
 
+# Saida padrao em recording/sessions/, ignorada pelo git.
+PASTA_SESSOES = os.path.join(_AQUI, "sessions")
+
 
 # Sextetos candidatos no pacote do CB2 1.8, mesmos indices do
 # gravacao_senoide.py. Indice de double, ja descontado o campo de tamanho.
 IDX = {
     "Ialvo": 19,     # corrente alvo do controlador
-    "Malvo": 25,     # torque alvo do controlador, em Nm se a doc estiver certa
+    "Malvo": 25,     # torque alvo do controlador, em Nm (confirmado contra a gravidade)
     "I": 43,         # corrente atual, o proxy de torque
-    "Ictrl": 49,     # a doc do 1.8 poe acelerometro da ferramenta aqui,
-}                    # entao este sexteto deve mesmo sair sem sentido
+    "Ictrl": 49,     # acelerometro da ferramenta no 1.8 (confirmado: modulo ~g
+}                    # parado); o nome fica pelas colunas dos takes gravados
 IDX_Q = 31
 IDX_QD = 37
 IDX_TCP = 73
@@ -273,6 +276,17 @@ def modo_repouso(ip, duracao):
                  "tau_gravitacional_nm": [round(float(v), 3) for v in tau],
                  "sextetos": {}, "veredito": {}}
 
+    # Com o braco perto da vertical a gravidade pede pouco torque, e a
+    # corrente fica abaixo do offset e do ruido do canal. Ai a assinatura de
+    # repouso nao decide nada, e dizer "nao parece corrente" seria falso.
+    CARGA_MINIMA_NM = 5.0
+    carga_baixa = max(abs(tau[1]), abs(tau[2])) < CARGA_MINIMA_NM
+    resultado["carga_baixa"] = bool(carga_baixa)
+    if carga_baixa:
+        print(f"\nAVISO: carga gravitacional em J2/J3 abaixo de {CARGA_MINIMA_NM:.0f} Nm "
+              "nesta pose. A assinatura de corrente fica INCONCLUSIVA;\n"
+              "  leve o ombro para perto da horizontal ou use --poses.")
+
     print("\nsextetos candidatos, media e desvio por canal:")
     for nome, inicio in IDX.items():
         bloco = sexteto(dados, inicio)
@@ -293,8 +307,12 @@ def modo_repouso(ip, duracao):
         # Assinatura de corrente em repouso: J1 quase nula, J2 ou J3 carregada.
         parece = (abs(media[0]) < 0.6 and max(abs(media[1]), abs(media[2])) > 0.5
                   and np.abs(media).max() < 30.0)
-        resultado["veredito"][nome] = "assinatura de corrente" if parece else "nao"
-        print(f"    -> {'assinatura de corrente' if parece else 'nao parece corrente'}")
+        if carga_baixa and not parece:
+            resultado["veredito"][nome] = "inconclusivo (carga baixa)"
+            print("    -> inconclusivo, carga baixa demais nesta pose")
+        else:
+            resultado["veredito"][nome] = "assinatura de corrente" if parece else "nao"
+            print(f"    -> {'assinatura de corrente' if parece else 'nao parece corrente'}")
 
         # Razao com o torque calculado, junta a junta. Se o campo for Nm, a
         # razao fica em 1. Se for ampere, a razao E o produto Kt*n.
@@ -525,7 +543,11 @@ def main():
             resultado = modo_poses(ip, args.poses, args.duracao_pose)
             padrao = "torque_calibracao.json"
 
-    caminho = args.saida or padrao
+    if args.saida:
+        caminho = args.saida
+    else:
+        os.makedirs(PASTA_SESSOES, exist_ok=True)
+        caminho = os.path.join(PASTA_SESSOES, padrao)
     with open(caminho, "w") as arquivo:
         json.dump(resultado, arquivo, indent=2)
     print(f"\nsalvo: {caminho}")

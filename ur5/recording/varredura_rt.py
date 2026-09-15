@@ -45,6 +45,9 @@ _PAI = os.path.dirname(_AQUI)
 if _PAI not in sys.path:
     sys.path.insert(0, _PAI)
 
+# Saida padrao em recording/sessions/, ignorada pelo git.
+PASTA_SESSOES = os.path.join(_AQUI, "sessions")
+
 from ur5_comum import (  # noqa: E402
     UR_IP, PORTA_REALTIME, enviar_script, verificar_pronto,
 )
@@ -55,7 +58,7 @@ BLOCOS = {
     19: "I alvo",
     25: "M alvo (torque alvo)",
     43: "I atual (candidato principal)",
-    49: "I control",
+    49: "acelerometro da ferramenta (49..51, 52..54 zerados)",
 }
 
 IDX_Q = 31
@@ -255,7 +258,7 @@ def main():
     parser.add_argument("--analisar", metavar="CSV",
                         help="so reanalisa um CSV ja gravado, sem capturar")
     parser.add_argument("--saida", default=None,
-                        help="nome do CSV de saida (padrao: varredura_<hora>.csv)")
+                        help="CSV de saida (padrao: sessions/varredura_<hora>.csv)")
     args = parser.parse_args()
 
     if args.analisar:
@@ -282,7 +285,11 @@ def main():
     print(f"capturando {args.duracao:.0f} s de {ip}:{PORTA_REALTIME} ...")
     linhas = capturar(args.duracao, ip)
 
-    saida = args.saida or f"varredura_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+    if args.saida:
+        saida = args.saida
+    else:
+        os.makedirs(PASTA_SESSOES, exist_ok=True)
+        saida = os.path.join(PASTA_SESSOES, f"varredura_{time.strftime('%Y%m%d_%H%M%S')}.csv")
     salvar_csv(linhas, saida)
     analisar(linhas)
 

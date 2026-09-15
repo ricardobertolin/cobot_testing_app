@@ -160,7 +160,7 @@ def main():
         description="extrai quadros e timestamps de um video.bag da RealSense")
     parser.add_argument("pasta", help="pasta do take (a que contem video.bag)")
     parser.add_argument("--bag", default=None,
-                        help="caminho do .bag (padrao: <pasta>/video.bag)")
+                        help="caminho do video (padrao: <pasta>/video.db3 ou video.bag)")
     parser.add_argument("--stream", default="color",
                         choices=["color", "infrared", "depth"],
                         help="qual stream extrair (padrao color)")
@@ -181,7 +181,12 @@ def main():
         sys.exit("opencv-python nao instalado (necessario para gravar imagens). "
                  "Rode: pip install opencv-python, ou use --so-tabela")
 
-    caminho_bag = args.bag or os.path.join(args.pasta, "video.bag")
+    # video.db3 no librealsense 2.57+, video.bag nos takes gravados antes.
+    caminho_bag = args.bag
+    if caminho_bag is None:
+        caminho_bag = os.path.join(args.pasta, "video.db3")
+        if not os.path.exists(caminho_bag):
+            caminho_bag = os.path.join(args.pasta, "video.bag")
     if not os.path.exists(caminho_bag):
         sys.exit(f"nao achei {caminho_bag}")
 

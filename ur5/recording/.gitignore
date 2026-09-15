@@ -1,0 +1,9 @@
+# Tudo o que os scripts gravam (sessoes com video .db3, quadros extraidos,
+# logs do robo, graficos, GIFs, varreduras) vai para sessions/ e fica so no
+# disco: sao GBs.
+sessions/
+
+# Por garantia, se algum video ou zip for salvo fora de sessions/.
+*.db3
+*.bag
+*.zip

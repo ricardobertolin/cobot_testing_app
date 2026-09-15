@@ -45,15 +45,18 @@ TAMANHO_RT_18 = 812
 #   1..6     q alvo
 #   7..12    qd alvo
 #   13..18   qdd alvo
-#   19..24   I alvo
-#   25..30   M alvo
+#   19..24   I alvo             <- em A, M alvo / I alvo ~12 (J2-J3) e ~10 (J4-J5)
+#   25..30   M alvo             <- torque alvo em Nm, sinal oposto ao da gravidade
+#                                  calculada pela cinematica (varredura 2026-09-14)
 #   31..36   q atual            <- posicao real das juntas (encoders)
 #   37..42   qd atual           <- velocidade real das juntas
-#   43..48   I atual
-#   49..54   I control
+#   43..48   I atual            <- existe e varia; offset de ~0.3 A e ruido de
+#                                  0.015 A, ainda nao conferido sob carga
+#   49..51   acelerometro da ferramenta [x,y,z] em m/s2 (modulo ~g parado)
+#   52..54   zerado neste 1.8
 #   55..60   tool vector atual no 3.x; ZERADO neste 1.8
-#   61..66   TCP speed atual    (nao verificado no 1.8)
-#   67..72   TCP force          (nao verificado no 1.8)
+#   61..66   TCP speed atual    (zero parado, nao verificado em movimento)
+#   67..72   TCP force          estimada pelo controlador, populada e ruidosa
 #   73..78   tool vector        <- pose real do TCP [x,y,z,rx,ry,rz] no 1.8
 #   79..84   TCP speed alvo
 #   85       digital input bits
@@ -74,8 +77,12 @@ IDX_QD_ATUAL = 37
 # 73..78 fecha em 0.0005 mm contra as juntas ATUAIS e 0.0114 mm contra as
 # ALVO, ou seja, e o tool vector atual.
 IDX_TCP_POSE = 73
-IDX_TCP_SPEED = 61   # nao verificado neste 1.8
-IDX_TCP_FORCE = 67   # nao verificado neste 1.8
+IDX_TCP_SPEED = 61   # zero parado, nao verificado em movimento
+IDX_TCP_FORCE = 67   # populado no 1.8, estimativa do controlador, nao sensor
+IDX_I_ALVO = 19      # A
+IDX_M_ALVO = 25      # Nm, confirmado contra a gravidade calculada
+IDX_I_ATUAL = 43     # A, nao conferido sob carga
+IDX_ACELEROMETRO = 49
 IDX_ENTRADAS = 85
 IDX_TIMER = 92
 IDX_MODO_ROBO = 94

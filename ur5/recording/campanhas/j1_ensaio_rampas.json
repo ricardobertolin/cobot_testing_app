@@ -1,0 +1,14 @@
+{
+  "_nota": "Ensaio do E1 (rampas de velocidade constante), uma repeticao. Niveis de 0,5 a 34 graus/s nos dois sentidos, curso ate 80 graus, para o mapa estatico de atrito x velocidade.",
+  "nome": "j1_ensaio_rampas",
+  "limites": {"vel_max": 1.0, "acc_max": 2.5, "curso_max_graus": 90.0},
+  "pose_inicial_graus": [0, -90, 0, -90, 0, 0],
+  "repeticoes": 1,
+  "do": 4,
+  "di": 4,
+  "video": {"stream": "infravermelho", "exposicao_ms": 7.8},
+  "experimentos": [
+    {"id": "E1_rampas", "tipo": "rampas",
+     "params": {"niveis_graus_s": [0.5, 1, 2, 5, 10, 20, 34], "curso_max_graus": 80, "acc": 1.5}}
+  ]
+}

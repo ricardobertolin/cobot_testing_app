@@ -103,8 +103,13 @@ def main():
 
     dentro = (t_robo >= inicio) & (t_robo <= fim)
     t_rel = t_robo[dentro] - inicio
-    titulo = (f"{meta['take']}  A={meta['amplitude_graus']:.0f} graus  "
-              f"f={meta['freq_hz']} Hz  ({args.velocidade:g}x)")
+    # Takes da campanha (rampas, degraus, swept, multisine) nao tem amplitude
+    # nem frequencia unicas: ali o titulo e o nome do experimento.
+    if meta.get("amplitude_graus") is not None:
+        descricao = f"A={meta['amplitude_graus']:.0f} graus  f={meta.get('freq_hz')} Hz"
+    else:
+        descricao = f"{meta.get('experimento', '')} ({meta.get('tipo', '?')})".strip()
+    titulo = f"{meta['take']}  {descricao}  ({args.velocidade:g}x)"
     fundo, (x0, x1, topo, base) = desenhar_grafico(
         t_rel, q1[dentro], i1[dentro], args.largura, args.altura_grafico, titulo)
 

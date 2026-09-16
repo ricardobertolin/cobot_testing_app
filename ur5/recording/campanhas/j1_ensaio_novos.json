@@ -1,0 +1,15 @@
+{
+  "_nota": "Ensaio dos dois experimentos que nunca rodaram no robo: swept sine e multisine. Uma repeticao de cada, para ver se o interpretador do CB2 acompanha o laco a cada 8 ms.",
+  "nome": "j1_ensaio_novos",
+  "limites": {"vel_max": 1.0, "acc_max": 2.5, "curso_max_graus": 90.0},
+  "pose_inicial_graus": [0, -90, 0, -90, 0, 0],
+  "repeticoes": 1,
+  "do": 4,
+  "di": 4,
+  "video": {"stream": "infravermelho", "exposicao_ms": 7.8},
+  "experimentos": [
+    {"id": "E4_swept_002_080", "tipo": "swept",
+     "params": {"f0": 0.02, "f1": 0.8, "duracao": 120, "vel_amp": 0.3, "amp_max_graus": 30}},
+    {"id": "E5_multisine_s0", "tipo": "multisine", "params": {"semente": 0}}
+  ]
+}

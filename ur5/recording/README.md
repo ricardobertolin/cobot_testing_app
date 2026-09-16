@@ -8,6 +8,8 @@ sincronizados por um LED.
 A primeira sessão completa foi em 2026-09-14 (`sessions/sessao_20260914`):
 um ensaio e três takes na J1 (A = 20°, f = 0,05 / 0,10 / 0,20 Hz, 60 s).
 
+**O que já foi gravado e o que falta está em [`ESTADO_EXPERIMENTOS.md`](ESTADO_EXPERIMENTOS.md); para rodar os experimentos que faltam, vá direto à seção 10.**
+
 ---
 
 ## 1. O que o experimento faz
@@ -114,6 +116,9 @@ Todos ficam em `ur5/recording/` e importam o `../ur5_comum.py`.
 | `gerar_graficos_take.py` | `graficos_j1.png`, `graficos_todos.png` e `resumo.json` de um ou vários takes. | não | — |
 | `gerar_gif_take.py` | GIF com o vídeo em cima e q1 + corrente I1 embaixo, com cursor. | não | `frames/` extraídos |
 | `gerar_notebook_sessao.py` | `dados_takes.ipynb` da sessão inteira, já executado. | não | — |
+| `rodar_campanha.py` | **Roda a lista inteira de experimentos** (seção 10): pose, vídeo, script, log, conferência, com retomada. | **sim** | robô + câmera |
+| `experimentos_j1.py` | Gera o URScript de cada experimento do plano e confere os limites antes de enviar. | não | — |
+| `logger_rt.py` | Grava o pacote inteiro da 30003 (103 colunas, com q/q̇/q̈ alvo). | não | robô |
 
 ### Onde os dados vão parar
 
@@ -432,3 +437,166 @@ do `video.db3` do teste de 5 s antes da sessão.
 
 **Fora da versão 2, por enquanto:** ArUco, gravação de q/qd/qdd alvo no log e os
 experimentos do plano (`PLANO_EXPERIMENTOS.md`).
+
+---
+
+## 10. Campanha de experimentos: rodar a lista inteira
+
+Esta seção é para quem vai gravar os experimentos que faltam, mesmo sem ter
+acompanhado o projeto. O que falta está em
+[`ESTADO_EXPERIMENTOS.md`](ESTADO_EXPERIMENTOS.md); o plano completo, com a
+justificativa de cada experimento, está em
+[`PLANO_EXPERIMENTOS.md`](PLANO_EXPERIMENTOS.md).
+
+### 10.1 Os scripts da campanha
+
+| Script | O que faz |
+|---|---|
+| `rodar_campanha.py` | **o que você roda.** Para cada experimento e repetição: volta à pose inicial, liga o vídeo, manda o URScript, grava o robô, desliga o vídeo, confere e segue. Retoma de onde parou |
+| `experimentos_j1.py` | gera o URScript de cada tipo (rampas, trapezoidal, degraus, swept, multisine, senoide, payload) e confere velocidade, aceleração e curso antes de mandar |
+| `logger_rt.py` | grava o pacote inteiro da 30003 (103 colunas, inclui a referência q/q̇/q̈ alvo) |
+| `campanhas/*.json` | a lista de experimentos e os limites |
+
+Arquivos de campanha prontos:
+
+| Arquivo | Conteúdo | Tempo |
+|---|---|---|
+| `campanhas/j1_pendentes.json` | **o que falta gravar** (84 takes) | ~158 min |
+| `campanhas/j1_sessao1.json` | a campanha completa, do zero (98 takes) | ~187 min |
+| `campanhas/j1_ensaio_rampas.json` | só o E1, 1 repetição | 4 min |
+| `campanhas/j1_ensaio_novos.json` | swept e multisine, 1 repetição | 6 min |
+| `campanhas/j1_ensaio_movimentos.json` | trapezoidal e degraus, 1 repetição | 4 min |
+
+### 10.2 Antes de começar
+
+1. **Robô:** ligado, freios soltos (RUNNING), pose vertical
+   `[0, −90, 0, −90, 0, 0]`°. Confira com os comandos da seção 3.3.
+2. **Rede:** `ping 10.26.10.20` tem que responder. Nenhum outro programa
+   conectado ao robô (a 30003 aceita um cliente por vez).
+3. **Câmera:** conectada em USB 3. Enquadre com `python ver_camera_v2.py`,
+   ajuste a exposição com `+`/`-`, e **feche a janela** (tecla `q`).
+4. **Célula:** área livre em todo o curso da J1 (até ±90°) e teach pendant ao
+   alcance da mão.
+5. **Disco:** o vídeo em infravermelho ocupa ~1,4 GB por minuto gravado. A
+   campanha inteira passa de 200 GB. Confira o espaço antes.
+
+### 10.3 Rodar
+
+Sempre confira o plano primeiro (não toca no robô):
+
+```
+python rodar_campanha.py campanhas/j1_pendentes.json --listar
+```
+
+Ele lista cada take com duração, picos de velocidade e aceleração, e marca
+`RECUSADO` o que passa dos limites. Depois:
+
+```
+python rodar_campanha.py campanhas/j1_pendentes.json
+```
+
+O script pede **`INICIAR`** uma vez, no começo, e daí roda sozinho. Cada take
+imprime o resultado:
+
+```
+[3/84] E7_A0100_f005_r1 (senoide, ~100 s)
+  -> ok: 4 bordas de LED, 13771 amostras
+```
+
+`ok` significa: robô em RUNNING o tempo todo e as 4 bordas de LED presentes.
+Qualquer outra coisa vira `refazer`, com o motivo.
+
+**Interrompeu (Ctrl+C, robô parou, acabou o dia)?** Rode o mesmo comando de
+novo: o `estado_campanha.json` da pasta da sessão guarda o que já deu certo, e
+esses são pulados.
+
+**Rodar só uma parte:**
+
+```
+python rodar_campanha.py campanhas/j1_pendentes.json --apenas E7_A0100_f005,E7_A0500_f005
+python rodar_campanha.py campanhas/j1_pendentes.json --repeticoes 1      uma repetição de cada
+```
+
+**Sem mexer no robô**, para conferir o que seria enviado:
+
+```
+python rodar_campanha.py campanhas/j1_pendentes.json --seco
+```
+
+### 10.4 Trocar entre infravermelho e RGB
+
+O padrão é **infravermelho** e é o recomendado: os imagers IR são global
+shutter (a imagem inteira é exposta no mesmo instante, o RGB expõe linha a
+linha) e ocupam metade da banda. Medido na mesma cena, 96 s:
+
+| | Taxa | fps real | Quadros perdidos |
+|---|---|---|---|
+| Infravermelho | 24 MB/s | 59,1 | 2 de 5694 |
+| RGB | 55 MB/s | 45,0 | 1297 de 5641 |
+
+Para trocar, há três caminhos:
+
+**a) Na linha de comando, só para aquela rodada:**
+
+```
+python rodar_campanha.py campanhas/j1_pendentes.json --stream rgb
+python rodar_campanha.py campanhas/j1_pendentes.json --stream ambos --exposicao-ms 5
+```
+
+`--stream` aceita `infravermelho`, `rgb` e `ambos`. O `--listar` mostra qual
+está valendo, na segunda linha.
+
+**b) No arquivo da campanha**, se a troca for permanente:
+
+```json
+"video": { "stream": "rgb", "exposicao_ms": 7.8 }
+```
+
+**c) Em um take avulso**, fora da campanha:
+
+```
+python gravar_video_v2.py --take nome --duracao 95 --stream rgb
+python ver_camera_v2.py --stream rgb
+```
+
+Ao gravar em RGB ou `ambos`, espere perda de quadros: os dois streams somam
+~79 MB/s. Se precisar dos dois, baixe a taxa (`--fps 30`).
+
+> A **extração não precisa de ajuste**: o `extrair_frames_v2.py` detecta sozinho
+> qual stream o arquivo tem (`--stream auto`, o padrão).
+
+### 10.5 Depois de gravar
+
+Não precisa do robô nem da câmera. Troque `<sessao>` pela pasta criada
+(`sessions/j1_pendentes_AAAAMMDD`):
+
+```
+python extrair_frames_v2.py <sessao>/<take> --passo 3      quadros + imu.csv, por take
+python verificar_sync.py    <sessao>/<take> --di 4         confere a sincronização
+python gerar_graficos_take.py "<sessao>/*"                 gráficos de todos os takes
+python gerar_gif_take.py    <sessao>/<take>                GIF (opcional, ~25 MB cada)
+python gerar_notebook_sessao.py <sessao>                   notebook da sessão
+```
+
+E, para os modelos:
+
+```
+cd ../sysid
+python rodar_lote.py ../recording/<sessao> --starts 5 --jobs 2
+```
+
+### 10.6 Se algo der errado
+
+| Sintoma | O que fazer |
+|---|---|
+| `o robo precisa estar em RUNNING` | soltar os freios no teach pendant |
+| `video nao iniciou` | câmera desconectada, ou `ver_camera_v2.py` / RealSense Viewer aberto |
+| take sai como `refazer` com menos de 4 bordas de LED | conferir o fio de loopback DO4 → DI4 e se o sinaleiro está no campo da câmera |
+| `robo saiu de RUNNING` | parada de proteção: ver o motivo no pendant antes de continuar |
+| `tempo esgotado esperando...` | o script parou no meio; olhar o `robo.csv` do take e refazer |
+| `RECUSADO: velocidade de pico ...` | o experimento passa dos limites do arquivo de campanha. **Não aumente os limites sem combinar**: eles existem para a segurança da célula |
+
+Anote no `meta.json` do take (campo `observacoes`) qualquer coisa fora do
+padrão. Se alguém passar na frente da câmera ou esbarrar no tripé, marque o take
+— a convenção aqui tem sido acrescentar `_NOK` ao nome da pasta, que sinaliza
+problema **de imagem**; o dado do robô continua válido.

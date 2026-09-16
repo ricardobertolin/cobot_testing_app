@@ -52,12 +52,23 @@ def marcar_led(ax, bordas):
 
 
 def rotulo_take(meta):
-    # Takes do gravacao_senoide_juntas.py trazem a lista "juntas".
-    juntas = meta.get("juntas") or [{"junta": 1, "amplitude_graus": meta["amplitude_graus"],
-                                     "freq_hz": meta["freq_hz"]}]
-    partes = [f"J{j['junta']}: A = {j['amplitude_graus']:.0f} graus, f = {j['freq_hz']} Hz"
-              for j in juntas]
-    return f"{meta['take']}  |  " + "; ".join(partes) + f", T = {meta['duracao_senoide_s']:.0f} s"
+    """
+    Titulo do grafico. Cobre os tres formatos de meta.json: senoide numa junta
+    (gravacao_senoide*.py), senoide em varias ("juntas") e os experimentos da
+    campanha (rodar_campanha.py), que nem sempre tem amplitude e frequencia.
+    """
+    duracao = meta.get("duracao_senoide_s") or meta.get("duracao_corpo_s") or 0.0
+    juntas = meta.get("juntas")
+    if not juntas and meta.get("amplitude_graus") is not None:
+        juntas = [{"junta": 1, "amplitude_graus": meta["amplitude_graus"],
+                   "freq_hz": meta.get("freq_hz")}]
+    if juntas:
+        partes = [f"J{j['junta']}: A = {j['amplitude_graus']:.0f} graus, f = {j['freq_hz']} Hz"
+                  for j in juntas]
+    else:
+        # experimento sem amplitude/frequencia unicas (rampas, degraus, swept, multisine)
+        partes = [f"{meta.get('experimento', meta.get('tipo', 'experimento'))} ({meta.get('tipo', '?')})"]
+    return f"{meta['take']}  |  " + "; ".join(partes) + f", T = {duracao:.0f} s"
 
 
 def grafico_j1(pasta, t, dados, meta, bordas):

@@ -136,6 +136,93 @@ def coletar_intrinsecos(perfil):
 
 
 # ============================================================
+# IMU
+# ============================================================
+
+def extrair_imu(caminho, pasta):
+    """
+    Le acelerometro e giroscopio DIRETO do sensor de movimento do arquivo e
+    grava imu.csv. Nao passa pelo pipeline: o pipeline sincroniza a IMU com os
+    quadros de video e entrega uma amostra repetida por quadro (~60 Hz), em vez
+    das ~200 Hz gravadas.
+
+    As primeiras amostras do acelerometro saem num relogio diferente (alguns
+    segundos desde o boot da camera, e nao o epoch das demais). Elas sao
+    descartadas: fica so o que esta no mesmo dominio da mediana do stream.
+    """
+    import threading
+
+    dispositivo = rs.context().load_device(caminho)
+    playback = dispositivo.as_playback()
+    playback.set_real_time(False)
+
+    amostras = []
+    trava = threading.Lock()
+
+    def guardar(quadro):
+        movimento = quadro.as_motion_frame()
+        dado = movimento.get_motion_data()
+        t_q, t_s, _, _ = tempos(movimento)
+        tipo = "accel" if movimento.get_profile().stream_type() == rs.stream.accel else "gyro"
+        with trava:
+            amostras.append((tipo, t_q, t_s, dado.x, dado.y, dado.z))
+
+    abertos = []
+    for sensor in dispositivo.query_sensors():
+        perfis = [p for p in sensor.get_stream_profiles()
+                  if p.stream_type() in (rs.stream.accel, rs.stream.gyro)]
+        if perfis:
+            sensor.open(perfis)
+            sensor.start(guardar)
+            abertos.append(sensor)
+    if not abertos:
+        return None
+
+    # Espera a reproducao COMECAR antes de esperar ela terminar: logo apos o
+    # start o status ainda pode ser "stopped", e o laco sairia sem ler nada.
+    import time as _time
+    inicio = _time.monotonic()
+    while (playback.current_status() == rs.playback_status.stopped and not amostras
+           and _time.monotonic() - inicio < 10.0):
+        _time.sleep(0.05)
+    while playback.current_status() != rs.playback_status.stopped:
+        _time.sleep(0.2)
+    for sensor in abertos:
+        sensor.stop()
+        sensor.close()
+
+    resumo = {}
+    linhas = []
+    for tipo in ("accel", "gyro"):
+        serie = sorted(a for a in amostras if a[0] == tipo)
+        if not serie:
+            continue
+        mediana = float(np.median([a[1] for a in serie]))
+        # mesmo dominio de relogio: dentro de 1 dia da mediana
+        validas = [a for a in serie if abs(a[1] - mediana) < 86400.0]
+        descartadas = len(serie) - len(validas)
+        linhas += validas
+        ts = np.array([a[1] for a in validas])
+        resumo[tipo] = {
+            "amostras": len(validas),
+            "descartadas_relogio": descartadas,
+            "hz_medido": round((len(ts) - 1) / (ts[-1] - ts[0]), 1) if len(ts) > 1 else None,
+            "duplicadas": int(len(ts) - len(np.unique(ts))),
+        }
+
+    linhas.sort(key=lambda a: (a[1], a[0]))
+    with open(os.path.join(pasta, "imu.csv"), "w", newline="") as arquivo:
+        arquivo.write("tipo,t_s,t_sensor_s,x,y,z\n")
+        for tipo, t_q, t_s, x, y, z in linhas:
+            arquivo.write(f"{tipo},{t_q:.6f},{'' if t_s is None else f'{t_s:.6f}'},"
+                          f"{x:.6f},{y:.6f},{z:.6f}\n")
+    for tipo, r in resumo.items():
+        print(f"IMU {tipo}: {r['amostras']} amostras a {r['hz_medido']} Hz "
+              f"({r['descartadas_relogio']} descartadas por relogio, {r['duplicadas']} duplicadas)")
+    return resumo
+
+
+# ============================================================
 # ESCOLHA DO STREAM
 # ============================================================
 
@@ -220,7 +307,6 @@ def main():
         args.stream = "infrared" if rs.stream.infrared in tipos else "color"
         print(f"stream escolhido: {args.stream}")
     tem_imu = rs.stream.accel in tipos or rs.stream.gyro in tipos
-    amostras_imu = []
 
     intrinsecos = coletar_intrinsecos(perfil)
     caminho_intr = os.path.join(args.pasta, "intrinsecos.json")
@@ -242,16 +328,6 @@ def main():
                 conjunto = pipeline.wait_for_frames(timeout_ms=5000)
             except RuntimeError:
                 break               # fim do arquivo
-
-            if tem_imu:
-                for item in conjunto:
-                    if not item.is_motion_frame():
-                        continue
-                    movimento = item.as_motion_frame()
-                    dado = movimento.get_motion_data()
-                    t_q, t_s, _, _ = tempos(movimento)
-                    tipo = "accel" if movimento.get_profile().stream_type() == rs.stream.accel else "gyro"
-                    amostras_imu.append((tipo, t_q, t_s, dado.x, dado.y, dado.z))
 
             quadro = pegar_quadro(conjunto, args.stream)
             if quadro is None:
@@ -299,20 +375,7 @@ def main():
         sys.exit("nenhum quadro do stream pedido foi encontrado no arquivo")
 
     # ---- IMU
-    resumo_imu = None
-    if amostras_imu:
-        amostras_imu.sort(key=lambda a: (a[0], a[1]))
-        with open(os.path.join(args.pasta, "imu.csv"), "w", newline="") as arquivo:
-            arquivo.write("tipo,t_s,t_sensor_s,x,y,z\n")
-            for tipo, t_q, t_s, x, y, z in amostras_imu:
-                arquivo.write(f"{tipo},{t_q:.6f},{'' if t_s is None else f'{t_s:.6f}'},"
-                              f"{x:.6f},{y:.6f},{z:.6f}\n")
-        resumo_imu = {}
-        for tipo in ("accel", "gyro"):
-            ts = [a[1] for a in amostras_imu if a[0] == tipo]
-            if len(ts) > 1:
-                resumo_imu[tipo] = {"amostras": len(ts),
-                                    "hz_medido": round((len(ts) - 1) / (ts[-1] - ts[0]), 1)}
+    resumo_imu = extrair_imu(caminho_bag, args.pasta) if tem_imu else None
 
     # ---- tabela
     caminho_csv = os.path.join(args.pasta, "frames.csv")

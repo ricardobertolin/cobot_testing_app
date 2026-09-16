@@ -127,6 +127,28 @@ def ler_seguranca(texto):
     return sinais or None
 
 
+def ler_uop(texto):
+    """
+    Extrai as portas UI e UO do iostate.dg.
+
+    Devolve {"UI": {n: bool, ...}, "UO": {n: bool, ...}}, ou None se a
+    leitura falhou. Sao os sinais que armam (ou nao) o modo remoto: a
+    cadeia de seguranca e o start vem por aqui.
+    """
+    if texto is None:
+        return None
+
+    ui, uo = {}, {}
+    for linha in texto.splitlines():
+        achado = re.match(r"(U[IO])\[\s*(\d+)\]\s+(ON|OFF)", linha)
+        if achado:
+            alvo = ui if achado.group(1) == "UI" else uo
+            alvo[int(achado.group(2))] = achado.group(3) == "ON"
+    if not ui and not uo:
+        return None
+    return {"UI": ui, "UO": uo}
+
+
 def ler_posicao(texto):
     """Extrai juntas, cartesiano e CFG do curpos.dg."""
     if texto is None:

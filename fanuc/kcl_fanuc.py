@@ -171,6 +171,10 @@ def main():
     analisador.add_argument("--senha", default="")
     analisador.add_argument("--juntas", action="store_true",
                             help="atalho: mostra as seis juntas")
+    analisador.add_argument("--reset", action="store_true",
+                            help="atalho: RESET (limpa falha, como o botao). "
+                                 "Nao move o robo; so limpa alarme e religa "
+                                 "servo. Util quando o botao fisico falha.")
     analisador.add_argument("--repl", action="store_true",
                             help="modo interativo")
     analisador.add_argument("--escrever", action="store_true",
@@ -196,6 +200,16 @@ def main():
             print(kcl.comando(texto).rstrip())
         except ErroKCL as erro:
             print(erro)
+
+    if opcoes.reset:
+        # RESET limpa falha e religa servo; nao inicia programa nem move o
+        # robo. Passa direto, sem exigir --escrever: e o equivalente ao
+        # botao, e o botao nao precisa de flag.
+        try:
+            print(kcl.comando("RESET").rstrip())
+        except ErroKCL as erro:
+            print(erro)
+        return 0
 
     if opcoes.juntas:
         enviar("SHOW VAR $MOR_GRP[1].$CURRENT_ANG")

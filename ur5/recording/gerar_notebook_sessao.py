@@ -1,6 +1,10 @@
 """
-Gera o notebook de uma sessao gravada: dados_takes.ipynb na pasta da sessao,
-so com celulas de codigo, ja executado (graficos e tabelas embutidos).
+Gera o notebook de uma ou mais sessoes gravadas: so celulas de codigo, ja
+executado (graficos e tabelas embutidos).
+
+Com uma sessao, escreve dados_takes.ipynb dentro dela. Com varias (ou com
+--saida), escreve um notebook unico que varre todas: os takes aparecem como
+"<sessao>/<take>", e os caminhos continuam relativos a pasta do notebook.
 
 Para cada take (subpasta com robo.csv): J1 empilhada, as seis juntas,
 acelerometro/entradas/modo/timer, dispersoes corrente x velocidade no trecho
@@ -12,6 +16,7 @@ Uso:
 
     python gerar_notebook_sessao.py sessions/sessao_20260914
     python gerar_notebook_sessao.py sessions/sessao_20260914 --sem-executar
+    python gerar_notebook_sessao.py sessions/* --saida sessions/dados_takes_geral.ipynb
 
 Requer: nbformat, nbclient, ipykernel, pandas, numpy, matplotlib.
 """
@@ -23,17 +28,29 @@ import os
 import nbformat as nbf
 from nbclient import NotebookClient
 
-parser = argparse.ArgumentParser(description="notebook com todos os dados de uma sessao")
-parser.add_argument("sessao", help="pasta da sessao (a que contem as pastas dos takes)")
+parser = argparse.ArgumentParser(description="notebook com todos os dados de uma ou mais sessoes")
+parser.add_argument("sessao", nargs="+", help="pastas de sessao (as que contem as pastas dos takes)")
+parser.add_argument("--saida", default=None,
+                    help="caminho do notebook (padrao: <sessao>/dados_takes.ipynb)")
 parser.add_argument("--sem-executar", action="store_true",
                     help="so escreve as celulas, sem rodar (notebook sai sem graficos)")
 args = parser.parse_args()
 
-DESTINO = os.path.join(args.sessao, "dados_takes.ipynb")
-TAKES = sorted(os.path.basename(os.path.dirname(p))
-               for p in glob.glob(os.path.join(args.sessao, "*", "robo.csv")))
+SESSOES = [s for s in args.sessao if os.path.isdir(s)]
+UMA = len(SESSOES) == 1 and not args.saida
+DESTINO = args.saida or os.path.join(SESSOES[0], "dados_takes.ipynb")
+BASE = os.path.dirname(os.path.abspath(DESTINO))
+
+# Nome do take no notebook: "<take>" quando e uma sessao so, "<sessao>/<take>"
+# quando sao varias. O caminho e sempre relativo a pasta do notebook.
+TAKES = []
+for sessao in SESSOES:
+    for csv in sorted(glob.glob(os.path.join(sessao, "*", "robo.csv"))):
+        pasta = os.path.dirname(csv)
+        rel = os.path.relpath(pasta, BASE).replace("\\", "/")
+        TAKES.append((os.path.basename(pasta) if UMA else rel, rel))
 if not TAKES:
-    raise SystemExit(f"nenhum take com robo.csv em {args.sessao}")
+    raise SystemExit(f"nenhum take com robo.csv em {', '.join(SESSOES)}")
 
 celulas = []
 celulas.append('''import json
@@ -67,9 +84,8 @@ celulas.append('''def carregar_take(pasta):
             "bordas": bordas, "senoide": senoide}
 
 
-takes = {p.name: carregar_take(p) for p in sorted(PASTA.iterdir())
-         if p.is_dir() and (p / "robo.csv").exists()}
-list(takes)''')
+takes = {nome: carregar_take(PASTA / caminho) for nome, caminho in TAKES}
+list(takes)''' .replace("TAKES", repr(TAKES)))
 
 celulas.append('''linhas = []
 for nome, tk in takes.items():
@@ -184,7 +200,7 @@ def estatisticas(nome):
     colunas = [c for c in r.columns if c not in ("t_mono", "t_wall", "t")]
     return r[colunas].describe().T''')
 
-for nome in TAKES:
+for nome, _ in TAKES:
     celulas.append(f'NOME = "{nome}"\nplot_j1(NOME)')
     celulas.append('plot_seis(NOME)')
     celulas.append('plot_outros(NOME)')
@@ -215,8 +231,8 @@ nb.cells = [nbf.v4.new_code_cell(c) for c in celulas]
 nb.metadata["kernelspec"] = {"name": "python3", "display_name": "Python 3", "language": "python"}
 
 if not args.sem_executar:
-    NotebookClient(nb, timeout=600, kernel_name="python3",
-                   resources={"metadata": {"path": os.path.abspath(args.sessao)}}).execute()
+    NotebookClient(nb, timeout=1800, kernel_name="python3",
+                   resources={"metadata": {"path": BASE}}).execute()
 nbf.write(nb, DESTINO)
 
 erros = [o for c in nb.cells for o in c.get("outputs", []) if o.get("output_type") == "error"]

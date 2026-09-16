@@ -1,0 +1,65 @@
+{
+  "_nota": "Campanha 1-DOF da J1 (PLANO_EXPERIMENTOS.md secao 3). Limites subidos em 2026-09-15 de 0.6/1.5 para 1.0 rad/s e 2.5 rad/s2, o que cobre o swept ate 0.8 Hz e a senoide de 20 graus a 0.4 Hz (o UR5 permite 3.14 rad/s na J1). Com estes valores os 98 takes passam no --listar. A confirmar com o professor.",
+  "nome": "j1_sessao1",
+  "limites": {
+    "vel_max": 1.0,
+    "acc_max": 2.5,
+    "curso_max_graus": 90.0
+  },
+  "pose_inicial_graus": [0, -90, 0, -90, 0, 0],
+  "repeticoes": 3,
+  "do": 4,
+  "di": 4,
+  "video": {
+    "stream": "infravermelho",
+    "exposicao_ms": 7.8
+  },
+  "experimentos": [
+    {"id": "E10_ref_inicio", "tipo": "senoide", "repeticoes": 1,
+     "params": {"amplitude_graus": 20, "freq_hz": 0.1}},
+
+    {"id": "E1_rampas", "tipo": "rampas",
+     "params": {"niveis_graus_s": [0.5, 1, 2, 5, 10, 20, 34], "curso_max_graus": 80, "acc": 1.5}},
+
+    {"id": "E2_trapezoidal_s0", "tipo": "trapezoidal", "params": {"semente": 0, "acc": 1.5}},
+    {"id": "E2_trapezoidal_s1", "tipo": "trapezoidal", "params": {"semente": 1, "acc": 1.5}},
+    {"id": "E2_trapezoidal_s2", "tipo": "trapezoidal", "params": {"semente": 2, "acc": 1.5}},
+    {"id": "E2_trapezoidal_s3", "tipo": "trapezoidal", "params": {"semente": 3, "acc": 1.5}},
+
+    {"id": "E3_degraus_s0", "tipo": "degraus", "params": {"semente": 0, "vel": 0.6, "acc": 1.5}},
+    {"id": "E3_degraus_s1", "tipo": "degraus", "params": {"semente": 1, "vel": 0.6, "acc": 1.5}},
+    {"id": "E3_degraus_s2", "tipo": "degraus", "params": {"semente": 2, "vel": 0.6, "acc": 1.5}},
+    {"id": "E3_degraus_s3", "tipo": "degraus", "params": {"semente": 3, "vel": 0.6, "acc": 1.5}},
+
+    {"id": "E4_swept_002_080", "tipo": "swept",
+     "params": {"f0": 0.02, "f1": 0.8, "duracao": 120, "vel_amp": 0.3, "amp_max_graus": 30}},
+
+    {"id": "E5_multisine_s0", "tipo": "multisine", "params": {"semente": 0}},
+    {"id": "E5_multisine_s1", "tipo": "multisine", "params": {"semente": 1}},
+
+    {"id": "E6_A05_f005", "tipo": "senoide", "params": {"amplitude_graus": 5, "freq_hz": 0.05}},
+    {"id": "E6_A05_f010", "tipo": "senoide", "params": {"amplitude_graus": 5, "freq_hz": 0.1}},
+    {"id": "E6_A05_f020", "tipo": "senoide", "params": {"amplitude_graus": 5, "freq_hz": 0.2}},
+    {"id": "E6_A05_f040", "tipo": "senoide", "params": {"amplitude_graus": 5, "freq_hz": 0.4}},
+    {"id": "E6_A10_f005", "tipo": "senoide", "params": {"amplitude_graus": 10, "freq_hz": 0.05}},
+    {"id": "E6_A10_f010", "tipo": "senoide", "params": {"amplitude_graus": 10, "freq_hz": 0.1}},
+    {"id": "E6_A10_f020", "tipo": "senoide", "params": {"amplitude_graus": 10, "freq_hz": 0.2}},
+    {"id": "E6_A10_f040", "tipo": "senoide", "params": {"amplitude_graus": 10, "freq_hz": 0.4}},
+    {"id": "E6_A20_f005", "tipo": "senoide", "params": {"amplitude_graus": 20, "freq_hz": 0.05}},
+    {"id": "E6_A20_f010", "tipo": "senoide", "params": {"amplitude_graus": 20, "freq_hz": 0.1}},
+    {"id": "E6_A20_f020", "tipo": "senoide", "params": {"amplitude_graus": 20, "freq_hz": 0.2}},
+    {"id": "E6_A20_f040", "tipo": "senoide", "params": {"amplitude_graus": 20, "freq_hz": 0.4}},
+
+    {"id": "E7_A0100_f005", "tipo": "senoide", "params": {"amplitude_graus": 0.1, "freq_hz": 0.05, "duracao": 100}},
+    {"id": "E7_A0500_f005", "tipo": "senoide", "params": {"amplitude_graus": 0.5, "freq_hz": 0.05, "duracao": 100}},
+    {"id": "E7_A1000_f005", "tipo": "senoide", "params": {"amplitude_graus": 1.0, "freq_hz": 0.05, "duracao": 100}},
+    {"id": "E7_A2000_f005", "tipo": "senoide", "params": {"amplitude_graus": 2.0, "freq_hz": 0.05, "duracao": 100}},
+    {"id": "E7_A0100_f020", "tipo": "senoide", "params": {"amplitude_graus": 0.1, "freq_hz": 0.2, "duracao": 25}},
+    {"id": "E7_A0500_f020", "tipo": "senoide", "params": {"amplitude_graus": 0.5, "freq_hz": 0.2, "duracao": 25}},
+    {"id": "E7_A1000_f020", "tipo": "senoide", "params": {"amplitude_graus": 1.0, "freq_hz": 0.2, "duracao": 25}},
+    {"id": "E7_A2000_f020", "tipo": "senoide", "params": {"amplitude_graus": 2.0, "freq_hz": 0.2, "duracao": 25}},
+
+    {"id": "E10_ref_fim", "tipo": "senoide", "repeticoes": 1,
+     "params": {"amplitude_graus": 20, "freq_hz": 0.1}}
+  ]
+}

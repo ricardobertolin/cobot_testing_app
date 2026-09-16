@@ -101,8 +101,26 @@ def montar_problema(modelo, ts, kt_n, saida, passos_rk4):
     return prob, fric
 
 
-def atrito_ao_longo(fric, p_fric, qd, ts, subpassos=10):
-    """F_f avaliado na velocidade MEDIDA; o estado z integrado por Euler."""
+def atrito_ao_longo(fric, p_fric, qd, ts, subpassos=10, limite=1e4):
+    """
+    F_f avaliado na velocidade MEDIDA, com o estado z integrado por Euler.
+
+    Modelos dinamicos sao rigidos (no LuGre o autovalor e sigma0*|v|/g): num
+    take com reversoes rapidas, o passo ts/subpassos estoura e o resultado vai
+    a 1e38. Aqui o numero de subpassos e multiplicado por 10 ate a saida ficar
+    abaixo de `limite` (um torque de atrito de 1e4 Nm ja e absurdo para esta
+    junta), com teto de 10000 subpassos.
+    """
+    while True:
+        saida = _atrito_euler(fric, p_fric, qd, ts, subpassos)
+        if np.all(np.isfinite(saida)) and np.abs(saida).max() < limite:
+            return saida
+        if subpassos >= 10000 or not fric.n_states:
+            return saida          # sem estado interno nao adianta subdividir
+        subpassos *= 10
+
+
+def _atrito_euler(fric, p_fric, qd, ts, subpassos):
     v = ca.MX.sym("v")
     z = ca.MX.sym("z", max(fric.n_states, 1))
     zz = z[: fric.n_states] if fric.n_states else ca.MX.zeros(0)

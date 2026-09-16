@@ -97,6 +97,32 @@ NEUTRO_DESCONHECIDO = "#8a8a6a"
 EIXOS = ["X", "Y", "Z", "W", "P", "R"]
 
 
+# Sinais UOP a mostrar. (grupo, indice, rotulo, bom_em):
+#   bom_em "on"   -> verde quando ON  (cadeia de seguranca satisfeita)
+#   bom_em "off"  -> verde quando OFF (Fault: ruim quando ON)
+#   bom_em None   -> neutro, so mostra o estado (momentaneos, informativos)
+#
+# Os tres primeiros UI sao ativo-baixo (o "*"): tem que estar ON para o
+# robo poder rodar. E o que a cadeia de seguranca da celula alimenta -- hoje
+# tudo OFF porque a UOP nao esta cabeada.
+UOP_UI = [
+    ("UI", 1, "*IMSTP", "on"),
+    ("UI", 2, "*HOLD", "on"),
+    ("UI", 3, "*SFSPD", "on"),
+    ("UI", 8, "ENABLE", "on"),
+    ("UI", 5, "FAULT RESET", None),
+    ("UI", 6, "START", None),
+    ("UI", 18, "PROD START", None),
+]
+UOP_UO = [
+    ("UO", 1, "CMD ENABLED", "on"),
+    ("UO", 2, "SYSTEM READY", "on"),
+    ("UO", 3, "PRG RUNNING", None),
+    ("UO", 6, "FAULT", "off"),
+    ("UO", 10, "BUSY", None),
+]
+
+
 # ============================================================
 # LEITURA, FORA DA THREAD DA INTERFACE
 # ============================================================
@@ -115,6 +141,7 @@ class Leitor:
         self.intervalo = 1.0 / max(0.5, hz)
         self.seguranca = None
         self.posicao = None
+        self.uop = None
         self.movidas = []
         self.erro = None
         self.amostras = 0
@@ -130,6 +157,7 @@ class Leitor:
 
             seg = mon.ler_seguranca(robo.ler("sftysig.dg"))
             pos = mon.ler_posicao(robo.ler("curpos.dg"))
+            uop = mon.ler_uop(robo.ler("iostate.dg"))
 
             if pos is not None:
                 self.movidas = mon.movimento(pos["juntas"], self._anterior)
@@ -140,6 +168,7 @@ class Leitor:
 
             self.seguranca = seg
             self.posicao = pos
+            self.uop = uop
             self.erro = robo.erro if (seg is None or pos is None) else None
 
             resto = self.intervalo - (time.monotonic() - inicio)
@@ -164,32 +193,70 @@ class Monitor(tk.Tk):
 
         self.title("FANUC LR Mate 200iC  -  monitor")
         self.configure(bg=FUNDO)
-        self.minsize(620, 700)
+        self.minsize(400, 320)
+        self.geometry("660x500")
 
         self.mono = tkfont.Font(family="Consolas", size=11)
         self.mono_p = tkfont.Font(family="Consolas", size=9)
         self.mono_g = tkfont.Font(family="Consolas", size=15, weight="bold")
         self.titulo = tkfont.Font(family="Consolas", size=9, weight="bold")
 
-        self._cabecalho()
-        self._pilula()
-        self._leds()
-        self._juntas()
-        self._cartesiano()
-        self._jog()
-        self._rodape()
+        # Area rolavel: um canvas com barra, e um frame (self.conteudo)
+        # dentro dele onde tudo e empacotado. Sem isso, em janela baixa o
+        # jog e o rodape somem embaixo sem como alcancar.
+        self.canvas = tk.Canvas(self, bg=FUNDO, highlightthickness=0)
+        barra_rol = tk.Scrollbar(self, orient="vertical",
+                                 command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=barra_rol.set)
+        barra_rol.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+
+        self.conteudo = tk.Frame(self.canvas, bg=FUNDO)
+        self._janela = self.canvas.create_window((0, 0), window=self.conteudo,
+                                                 anchor="nw")
+        self.conteudo.bind(
+            "<Configure>",
+            lambda _: self.canvas.configure(
+                scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind(
+            "<Configure>",
+            lambda e: self.canvas.itemconfig(self._janela, width=e.width))
+        self.canvas.bind_all(
+            "<MouseWheel>",
+            lambda e: self.canvas.yview_scroll(int(-e.delta / 120), "units"))
+
+        self._cabecalho(self.conteudo)
+        self._pilula(self.conteudo)
+
+        # Duas colunas: a esquerda com estado (seguranca, UOP), a direita
+        # com pose (juntas, mundo, jog). Encurta a altura pela metade; o
+        # scroll continua de rede se a janela ficar bem baixa.
+        colunas = tk.Frame(self.conteudo, bg=FUNDO)
+        colunas.pack(fill="both", expand=True)
+        esq = tk.Frame(colunas, bg=FUNDO)
+        esq.pack(side="left", fill="both", expand=True, anchor="n")
+        dire = tk.Frame(colunas, bg=FUNDO)
+        dire.pack(side="left", fill="both", expand=True, anchor="n")
+
+        self._leds(esq)
+        self._uop(esq)
+        self._juntas(dire)
+        self._cartesiano(dire)
+        self._jog(dire)
+
+        self._rodape(self.conteudo)
 
         self.protocol("WM_DELETE_WINDOW", self._fechar)
         self._atualizar()
 
     # ---------- construcao ----------
 
-    def _secao(self, texto):
-        tk.Label(self, text=texto, bg=FUNDO, fg=FRACO, font=self.titulo,
+    def _secao(self, texto, pai):
+        tk.Label(pai, text=texto, bg=FUNDO, fg=FRACO, font=self.titulo,
                  anchor="w").pack(fill="x", padx=14, pady=(12, 2))
 
-    def _cabecalho(self):
-        barra = tk.Frame(self, bg=BARRA)
+    def _cabecalho(self, pai):
+        barra = tk.Frame(pai, bg=BARRA)
         barra.pack(fill="x")
         tk.Label(barra, text="  LR Mate 200iC   R-30iA Mate", bg=BARRA,
                  fg="white", font=self.titulo, anchor="w",
@@ -198,32 +265,66 @@ class Monitor(tk.Tk):
                                fg="#9fb6c8", font=self.mono_p, anchor="e")
         self.rot_ip.pack(side="right")
 
-    def _pilula(self):
-        quadro = tk.Frame(self, bg=FUNDO)
+    def _pilula(self, pai):
+        quadro = tk.Frame(pai, bg=FUNDO)
         quadro.pack(fill="x", padx=14, pady=(12, 0))
         self.rot_estado = tk.Label(quadro, text="CONECTANDO", bg=NEUTRO,
                                    fg="white", font=self.mono_g,
                                    padx=16, pady=9, anchor="w")
         self.rot_estado.pack(fill="x")
-        self.rot_detalhe = tk.Label(self, text="", bg=FUNDO, fg=FRACO,
-                                    font=self.mono_p, anchor="w")
+        self.rot_detalhe = tk.Label(pai, text="", bg=FUNDO, fg=FRACO,
+                                    font=self.mono_p, anchor="w",
+                                    wraplength=520, justify="left")
         self.rot_detalhe.pack(fill="x", padx=14, pady=(4, 0))
 
-    def _leds(self):
-        self._secao("SINAIS DE SEGURANCA")
-        quadro = tk.Frame(self, bg="#141414")
+    def _leds(self, pai):
+        self._secao("SINAIS DE SEGURANCA", pai)
+        quadro = tk.Frame(pai, bg="#141414")
         quadro.pack(fill="x", padx=14)
         self.leds = {}
         for i, (chave, rotulo, _) in enumerate(SINAIS):
             cel = tk.Label(quadro, text=rotulo, bg="#141414", fg=LED_OFF,
                            font=self.mono_p, padx=6, pady=5, anchor="w")
-            cel.grid(row=i // 4, column=i % 4, sticky="ew")
-            quadro.grid_columnconfigure(i % 4, weight=1)
+            cel.grid(row=i // 2, column=i % 2, sticky="ew")
+            quadro.grid_columnconfigure(i % 2, weight=1)
             self.leds[chave] = cel
 
-    def _juntas(self):
-        self._secao("JUNTAS")
-        quadro = tk.Frame(self, bg=TELA, padx=10, pady=8)
+    def _uop(self, pai):
+        self._secao("UOP  (modo remoto: seguranca e start)", pai)
+        quadro = tk.Frame(pai, bg="#141414")
+        quadro.pack(fill="x", padx=14)
+        self.leds_uop = {}
+        linhas = [("entradas UI", UOP_UI), ("saidas UO", UOP_UO)]
+        linha = 0
+        for titulo, grupo in linhas:
+            tk.Label(quadro, text=titulo, bg="#141414", fg=FRACO,
+                     font=self.mono_p, anchor="w", padx=6
+                     ).grid(row=linha, column=0, columnspan=2,
+                            sticky="w", pady=(4, 0))
+            linha += 1
+            for i, (g, idx, rotulo, _) in enumerate(grupo):
+                cel = tk.Label(quadro, text=rotulo, bg="#141414", fg=LED_OFF,
+                               font=self.mono_p, padx=6, pady=4, anchor="w")
+                cel.grid(row=linha + i // 2, column=i % 2, sticky="ew")
+                quadro.grid_columnconfigure(i % 2, weight=1)
+                self.leds_uop[(g, idx)] = cel
+            linha += (len(grupo) + 1) // 2
+
+        # SHIFT e a tecla RESET do pendant nao existem em diagnostico nenhum
+        # -- o controlador nao publica estado de tecla do pendant. Diz isso
+        # na tela, para nao parecer status que sumiu.
+        tk.Label(quadro,
+                 text="SHIFT e a tecla RESET fisica do pendant nao sao "
+                      "publicados (o \"FAULT RESET\" e o sinal UOP, nao a "
+                      "tecla). RESET por software funciona como acao.",
+                 bg="#141414", fg=FRACO, font=self.mono_p, anchor="w",
+                 wraplength=280, justify="left", padx=6
+                 ).grid(row=linha, column=0, columnspan=2, sticky="w",
+                        pady=(4, 4))
+
+    def _juntas(self, pai):
+        self._secao("JUNTAS", pai)
+        quadro = tk.Frame(pai, bg=TELA, padx=10, pady=8)
         quadro.pack(fill="x", padx=14)
         self.rot_junta = []
         self.canvas_junta = []
@@ -247,9 +348,9 @@ class Monitor(tk.Tk):
             self.canvas_junta.append(cv)
             self.rot_seta.append(seta)
 
-    def _cartesiano(self):
-        self._secao("MUNDO")
-        quadro = tk.Frame(self, bg=TELA, padx=10, pady=8)
+    def _cartesiano(self, pai):
+        self._secao("MUNDO", pai)
+        quadro = tk.Frame(pai, bg=TELA, padx=10, pady=8)
         quadro.pack(fill="x", padx=14)
         self.rot_eixo = {}
         for i, (nome, unidade) in enumerate(
@@ -267,21 +368,23 @@ class Monitor(tk.Tk):
                      font=self.mono_p).pack(side="left")
             self.rot_eixo[nome] = v
 
-        self.rot_cfg = tk.Label(self, text="", bg=FUNDO, fg=TEXTO,
-                                font=self.mono_p, anchor="w")
+        self.rot_cfg = tk.Label(pai, text="", bg=FUNDO, fg=TEXTO,
+                                font=self.mono_p, anchor="w",
+                                wraplength=280, justify="left")
         self.rot_cfg.pack(fill="x", padx=14, pady=(5, 0))
 
-    def _jog(self):
-        self._secao("JOG  (inferido do movimento; a tecla nao e publicada)")
-        self.rot_jog = tk.Label(self, text="parado", bg=TELA, fg=FRACO,
+    def _jog(self, pai):
+        self._secao("JOG  (inferido do movimento; a tecla nao e publicada)",
+                    pai)
+        self.rot_jog = tk.Label(pai, text="parado", bg=TELA, fg=FRACO,
                                 font=self.mono, anchor="w", padx=10, pady=8,
                                 justify="left")
         self.rot_jog.pack(fill="x", padx=14)
 
-    def _rodape(self):
-        self.rodape = tk.Label(self, text="", bg="#e8e4d4", fg=FRACO,
+    def _rodape(self, pai):
+        self.rodape = tk.Label(pai, text="", bg="#e8e4d4", fg=FRACO,
                                font=self.mono_p, anchor="w", padx=10, pady=4)
-        self.rodape.pack(fill="x", side="bottom")
+        self.rodape.pack(fill="x")
 
     # ---------- desenho ----------
 
@@ -335,6 +438,21 @@ class Monitor(tk.Tk):
                 continue
             ok = ligado if bom_em_true else not ligado
             cel.configure(fg="#4caf50" if ok else "#ef5350")
+
+        # ---- UOP ----
+        uop = self.leitor.uop
+        for g, idx, _rot, bom_em in (UOP_UI + UOP_UO):
+            cel = self.leds_uop[(g, idx)]
+            estado = uop.get(g, {}).get(idx) if uop else None
+            if estado is None:
+                cel.configure(fg=LED_OFF)
+                continue
+            if bom_em is None:
+                cel.configure(fg="#c8c8b0" if estado else LED_OFF)
+            elif bom_em == "on":
+                cel.configure(fg="#4caf50" if estado else "#ef5350")
+            else:  # bom_em == "off": ruim quando ON (Fault)
+                cel.configure(fg="#ef5350" if estado else LED_OFF)
 
         # ---- juntas ----
         if pos is not None:

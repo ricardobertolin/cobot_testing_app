@@ -1,0 +1,303 @@
+{
+  "_nota": "Experimentos que ainda faltam gravar, ver ESTADO_EXPERIMENTOS.md. E derivado de j1_sessao1.json: as senoides A=20 graus em 0,05/0,10/0,20 Hz sairam (ja tem 3 repeticoes gravadas em sessions/sessao_20260915) e os experimentos ja feitos uma vez estao com as repeticoes restantes.",
+  "nome": "j1_pendentes",
+  "limites": {
+    "vel_max": 1.0,
+    "acc_max": 2.5,
+    "curso_max_graus": 90.0
+  },
+  "pose_inicial_graus": [
+    0,
+    -90,
+    0,
+    -90,
+    0,
+    0
+  ],
+  "repeticoes": 3,
+  "do": 4,
+  "di": 4,
+  "video": {
+    "stream": "infravermelho",
+    "exposicao_ms": 7.8
+  },
+  "experimentos": [
+    {
+      "id": "E10_ref_inicio",
+      "tipo": "senoide",
+      "repeticoes": 1,
+      "params": {
+        "amplitude_graus": 20,
+        "freq_hz": 0.1
+      }
+    },
+    {
+      "id": "E1_rampas",
+      "tipo": "rampas",
+      "params": {
+        "niveis_graus_s": [
+          0.5,
+          1,
+          2,
+          5,
+          10,
+          20,
+          34
+        ],
+        "curso_max_graus": 80,
+        "acc": 1.5
+      },
+      "repeticoes": 2
+    },
+    {
+      "id": "E2_trapezoidal_s0",
+      "tipo": "trapezoidal",
+      "params": {
+        "semente": 0,
+        "acc": 1.5
+      },
+      "repeticoes": 2
+    },
+    {
+      "id": "E2_trapezoidal_s1",
+      "tipo": "trapezoidal",
+      "params": {
+        "semente": 1,
+        "acc": 1.5
+      }
+    },
+    {
+      "id": "E2_trapezoidal_s2",
+      "tipo": "trapezoidal",
+      "params": {
+        "semente": 2,
+        "acc": 1.5
+      }
+    },
+    {
+      "id": "E2_trapezoidal_s3",
+      "tipo": "trapezoidal",
+      "params": {
+        "semente": 3,
+        "acc": 1.5
+      }
+    },
+    {
+      "id": "E3_degraus_s0",
+      "tipo": "degraus",
+      "params": {
+        "semente": 0,
+        "vel": 0.6,
+        "acc": 1.5
+      },
+      "repeticoes": 2
+    },
+    {
+      "id": "E3_degraus_s1",
+      "tipo": "degraus",
+      "params": {
+        "semente": 1,
+        "vel": 0.6,
+        "acc": 1.5
+      }
+    },
+    {
+      "id": "E3_degraus_s2",
+      "tipo": "degraus",
+      "params": {
+        "semente": 2,
+        "vel": 0.6,
+        "acc": 1.5
+      }
+    },
+    {
+      "id": "E3_degraus_s3",
+      "tipo": "degraus",
+      "params": {
+        "semente": 3,
+        "vel": 0.6,
+        "acc": 1.5
+      }
+    },
+    {
+      "id": "E4_swept_002_080",
+      "tipo": "swept",
+      "params": {
+        "f0": 0.02,
+        "f1": 0.8,
+        "duracao": 120,
+        "vel_amp": 0.3,
+        "amp_max_graus": 30
+      },
+      "repeticoes": 2
+    },
+    {
+      "id": "E5_multisine_s0",
+      "tipo": "multisine",
+      "params": {
+        "semente": 0
+      },
+      "repeticoes": 2
+    },
+    {
+      "id": "E5_multisine_s1",
+      "tipo": "multisine",
+      "params": {
+        "semente": 1
+      }
+    },
+    {
+      "id": "E6_A05_f005",
+      "tipo": "senoide",
+      "params": {
+        "amplitude_graus": 5,
+        "freq_hz": 0.05
+      }
+    },
+    {
+      "id": "E6_A05_f010",
+      "tipo": "senoide",
+      "params": {
+        "amplitude_graus": 5,
+        "freq_hz": 0.1
+      }
+    },
+    {
+      "id": "E6_A05_f020",
+      "tipo": "senoide",
+      "params": {
+        "amplitude_graus": 5,
+        "freq_hz": 0.2
+      }
+    },
+    {
+      "id": "E6_A05_f040",
+      "tipo": "senoide",
+      "params": {
+        "amplitude_graus": 5,
+        "freq_hz": 0.4
+      }
+    },
+    {
+      "id": "E6_A10_f005",
+      "tipo": "senoide",
+      "params": {
+        "amplitude_graus": 10,
+        "freq_hz": 0.05
+      }
+    },
+    {
+      "id": "E6_A10_f010",
+      "tipo": "senoide",
+      "params": {
+        "amplitude_graus": 10,
+        "freq_hz": 0.1
+      }
+    },
+    {
+      "id": "E6_A10_f020",
+      "tipo": "senoide",
+      "params": {
+        "amplitude_graus": 10,
+        "freq_hz": 0.2
+      }
+    },
+    {
+      "id": "E6_A10_f040",
+      "tipo": "senoide",
+      "params": {
+        "amplitude_graus": 10,
+        "freq_hz": 0.4
+      }
+    },
+    {
+      "id": "E6_A20_f040",
+      "tipo": "senoide",
+      "params": {
+        "amplitude_graus": 20,
+        "freq_hz": 0.4
+      }
+    },
+    {
+      "id": "E7_A0100_f005",
+      "tipo": "senoide",
+      "params": {
+        "amplitude_graus": 0.1,
+        "freq_hz": 0.05,
+        "duracao": 100
+      }
+    },
+    {
+      "id": "E7_A0500_f005",
+      "tipo": "senoide",
+      "params": {
+        "amplitude_graus": 0.5,
+        "freq_hz": 0.05,
+        "duracao": 100
+      }
+    },
+    {
+      "id": "E7_A1000_f005",
+      "tipo": "senoide",
+      "params": {
+        "amplitude_graus": 1.0,
+        "freq_hz": 0.05,
+        "duracao": 100
+      }
+    },
+    {
+      "id": "E7_A2000_f005",
+      "tipo": "senoide",
+      "params": {
+        "amplitude_graus": 2.0,
+        "freq_hz": 0.05,
+        "duracao": 100
+      }
+    },
+    {
+      "id": "E7_A0100_f020",
+      "tipo": "senoide",
+      "params": {
+        "amplitude_graus": 0.1,
+        "freq_hz": 0.2,
+        "duracao": 25
+      }
+    },
+    {
+      "id": "E7_A0500_f020",
+      "tipo": "senoide",
+      "params": {
+        "amplitude_graus": 0.5,
+        "freq_hz": 0.2,
+        "duracao": 25
+      }
+    },
+    {
+      "id": "E7_A1000_f020",
+      "tipo": "senoide",
+      "params": {
+        "amplitude_graus": 1.0,
+        "freq_hz": 0.2,
+        "duracao": 25
+      }
+    },
+    {
+      "id": "E7_A2000_f020",
+      "tipo": "senoide",
+      "params": {
+        "amplitude_graus": 2.0,
+        "freq_hz": 0.2,
+        "duracao": 25
+      }
+    },
+    {
+      "id": "E10_ref_fim",
+      "tipo": "senoide",
+      "repeticoes": 1,
+      "params": {
+        "amplitude_graus": 20,
+        "freq_hz": 0.1
+      }
+    }
+  ]
+}

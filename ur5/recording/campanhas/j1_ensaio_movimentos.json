@@ -1,0 +1,14 @@
+{
+  "_nota": "Ensaio do E2 (ponto a ponto trapezoidal, Test 1 do artigo) e do E3 (degraus aleatorios, como o random_steps do BAB), uma repeticao de cada.",
+  "nome": "j1_ensaio_movimentos",
+  "limites": {"vel_max": 1.0, "acc_max": 2.5, "curso_max_graus": 90.0},
+  "pose_inicial_graus": [0, -90, 0, -90, 0, 0],
+  "repeticoes": 1,
+  "do": 4,
+  "di": 4,
+  "video": {"stream": "infravermelho", "exposicao_ms": 7.8},
+  "experimentos": [
+    {"id": "E2_trapezoidal_s0", "tipo": "trapezoidal", "params": {"semente": 0, "acc": 1.5}},
+    {"id": "E3_degraus_s0", "tipo": "degraus", "params": {"semente": 0, "vel": 0.6, "acc": 1.5}}
+  ]
+}

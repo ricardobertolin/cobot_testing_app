@@ -1,0 +1,65 @@
+/* ============================================================
+   Trava de layout do pendant no painel de 800x480.
+
+   O problema: apertar uma seta de jog trocava o painel de duas colunas para
+   uma, no meio do movimento, e o botao saia de baixo do dedo.
+
+   A cadeia: o status passa de "simulacao: parado" para "em movimento", o
+   header (flex-wrap:wrap) quebra em duas linhas, a linha extra rouba altura
+   do main, os controles deixam de caber, nasce barra de rolagem, a barra
+   come ~15px de largura, e o #controles com repeat(auto-fit,minmax(18.5rem,
+   1fr)) numa coluna de 38rem tem folga de so 4,8px (2 x 296 + 11 = 603
+   contra 608). Perde os 15px e cai para uma coluna, que e mais alta, que
+   mantem a barra, que trava o estado.
+
+   Mexer na escala nao resolveria: rem nao muda com a escala.
+   ============================================================ */
+
+/* 1. Tira o gatilho: o cabecalho nunca quebra linha. */
+header,
+header .direita { flex-wrap: nowrap !important; }
+header .estado {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* 2. Tira a consequencia: duas colunas fixas em vez de auto-fit. */
+#controles { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+
+/* 3. Paga a conta da coluna forcada. Com 2 x 1fr numa largura reduzida pela
+      barra, a linha ficaria com ~291px contra os 296px que precisa, e a
+      segunda tecla sairia pela direita (o CSS original avisa disso).
+      Encolher rotulo e campo devolve 1,1rem. As teclas ficam intactas: o
+      alvo de dedo de 44px nao se negocia. */
+.rotulo { width: 3.5rem !important; }
+.valor  { min-width: 3.4rem !important; }
+
+/* 4. Com o header em nowrap os botoes se espremem e "tela cheia" quebraria
+      em duas linhas, engordando a barra numa tela que tem 480px no total. */
+header a,
+header button.link { white-space: nowrap; }
+
+/* 5. Tarja de "armado". Ambar de proposito: nao pode ser confundida com o
+      #aviso vermelho do app, que significa "esta movendo o robo AGORA".
+      Esta significa "vai mover assim que o robo ligar". */
+#kiosk-armado {
+  display: none;
+  background: #b35c00;
+  color: #fff;
+  font-weight: 700;
+  text-align: center;
+  padding: .3rem .6rem;
+  font-size: .82rem;
+  letter-spacing: .02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: none;
+}
+
+/* 6. O botao "tela cheia" nao tem funcao num quiosque que ja nasce em tela
+      cheia, e no modo de comando o cabecalho ganha "COMANDANDO" e
+      "robo pronto (RUNNING)", que empurram ele para fora da tela. */
+#botao-cheia { display: none !important; }

@@ -1,0 +1,80 @@
+# ============================================================
+#  custom.toml - personalizacao de primeiro boot do pendant do UR5
+#
+#  MODELO. Copie para a raiz da particao de boot do cartao (a que o Windows
+#  monta com o rotulo "bootfs"), com o nome custom.toml, e troque o que esta
+#  marcado com <...>. Nao versione a copia preenchida: ela carrega o PSK do
+#  Wi-Fi e o hash da senha.
+#
+#  Quem le este arquivo e /usr/lib/raspberrypi-sys-mods/firstboot, no primeiro
+#  boot, uma vez so. E o mecanismo nativo do Raspberry Pi OS, o mesmo que a
+#  engrenagem do Raspberry Pi Imager escreve. Por isso da para preparar o
+#  cartao de qualquer computador, sem abrir o Imager.
+#
+#  CUIDADO: este arquivo so vale se a sua imagem usar o firstboot. Sao DOIS
+#  mecanismos, e eles nao convivem:
+#
+#    custom.toml  -> raspberrypi-sys-mods/firstboot. E o da imagem de 2024 que
+#                    roda no pendant4, que nao tem cloud-init.
+#    cloud-init   -> user-data + network-config + meta-data. E o que a imagem
+#                    Lite 2026-09-15 parece usar.
+#
+#  Como saber qual e a sua, com o cartao no PC: se o cmdline.txt tiver o token
+#  "init=/usr/lib/raspberrypi-sys-mods/firstboot", e firstboot. Depois do
+#  primeiro boot, o firstboot consome o custom.toml e remove o token; se o
+#  arquivo continuar la e o token tambem, o binario nao existe no rootfs e a
+#  imagem e cloud-init.
+#
+#  Na duvida use a engrenagem do Raspberry Pi Imager: ela escreve o mecanismo
+#  que combina com a imagem que ela baixou.
+#
+#  Se o firstboot reclamar de "python3-toml is not installed", a imagem nao tem
+#  o parser e este arquivo e ignorado. A mensagem aparece na tela do Pi.
+# ============================================================
+config_version = 1
+
+[system]
+# O padrao dos pendants novos e 12, para casar com o IP que o instalar.sh
+# configura (10.26.10.12). O .11 fica reservado para o pendant4, que esta em
+# uso. Dois cartoes iguais nao podem ficar ligados ao mesmo tempo: conflito de
+# IP. O hostname e tambem o nome mDNS, pendant12.local.
+hostname = "pendant12"
+
+[user]
+# O nome nao e livre: o instalar.sh assume /home/raspberry.
+name = "raspberry"
+# Duas opcoes:
+#   password_encrypted = true   e o hash, gerado com:  openssl passwd -6
+#   password_encrypted = false  e a senha em texto puro, que o Pi troca pelo
+#                               hash no primeiro boot (fica legivel no cartao
+#                               ate la)
+password = "<hash-sha512-ou-senha>"
+password_encrypted = true
+
+[ssh]
+enabled = true
+password_authentication = true
+# A chave publica de cada computador que vai administrar o pendant
+# (~/.ssh/id_ed25519_pi.pub). Pode listar varias.
+authorized_keys = [
+  "<ssh-ed25519 AAAA... comentario>",
+]
+
+# A LAN, e a parte que a tentativa anterior nao tinha. O pendant vive em duas
+# redes: a eth0 vai no robo e e uma ilha sem roteador, entao o Wi-Fi e a unica
+# rota default e a unica forma de chegar no Pi por SSH ou pelo navegador do PC.
+# Sem esta secao o pendant sobe inalcancavel.
+[wlan]
+ssid = "<SSID>"
+# Com password_encrypted = true, use o PSK de 64 hex. Para derivar, num Linux
+# ou no proprio Pi:
+#     wpa_passphrase "<SSID>" "<senha>"
+# e copie a linha psk=. Com false, a senha em texto puro tambem serve.
+password = "<psk-64-hex-ou-senha>"
+password_encrypted = true
+hidden = false
+country = "BR"
+
+[locale]
+keymap = "br"
+timezone = "America/Sao_Paulo"

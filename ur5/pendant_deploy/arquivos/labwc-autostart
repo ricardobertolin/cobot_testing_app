@@ -1,0 +1,4 @@
+# Autostart do labwc para o quiosque do pendant. Substitui /etc/xdg/labwc/autostart.
+# Sem painel nem desktop: so o pendant em tela cheia.
+/home/raspberry/quiosque.sh &
+/home/raspberry/vigia-modo.sh &

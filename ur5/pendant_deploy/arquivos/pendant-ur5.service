@@ -1,0 +1,21 @@
+[Unit]
+Description=Pendant e digital twin do UR5 CB2
+Documentation=https://github.com/ricardobertolin/cobot_testing_ur5_app
+After=network.target
+# Nao usa network-online.target de proposito: a tela tem que subir mesmo
+# sem rede nenhuma. Quem espera o robo e o lancador, num laco.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=raspberry
+Group=raspberry
+WorkingDirectory=/home/raspberry/cobot_testing_ur5_app
+ExecStart=/home/raspberry/iniciar-servidor.sh
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

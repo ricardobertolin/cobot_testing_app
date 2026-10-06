@@ -1,0 +1,147 @@
+===========================================================
+ PENDANT DO UR5 NUM RASPBERRY PI  -  comece por aqui
+===========================================================
+
+O que e isto
+------------
+Um pacote que transforma um Raspberry Pi (3 ou 4) num "pendant" do robo UR5
+CB2: um painel de 800x480 que mostra o robo em 3D e permite move-lo (jog).
+O Pi liga e abre o programa sozinho, em tela cheia, sem teclado.
+
+Voce vai precisar de
+--------------------
+  - Raspberry Pi 3 ou 4, com fonte e um cartao microSD (8 GB ou mais)
+  - um leitor de cartao no PC
+  - Raspberry Pi Imager   ->  raspberrypi.com/software
+  - a sua rede Wi-Fi (SSID e senha)
+  - para o teste completo com o robo: o UR5 e o cabo de rede dele
+    (sem o robo tudo funciona em modo SIMULACAO, da para avaliar a interface)
+
+
+O PROCEDIMENTO  (3 passos, nenhum deles dentro do Pi)
+=====================================================
+
+PASSO 1 - Gravar o cartao
+-------------------------
+Abra o Raspberry Pi Imager e escolha:
+
+  Dispositivo      o seu modelo de Pi
+  Sistema          Raspberry Pi OS LITE (64-bit)
+                   (esta em "Raspberry Pi OS (other)")
+  Armazenamento    o cartao  <- CONFIRA O TAMANHO, para nao pegar um HD
+
+Deixe o Imager BAIXAR a imagem, em vez de apontar um .img guardado.
+
+Clique na engrenagem / "Editar definicoes" e preencha:
+
+  hostname         pendant12
+  usuario          raspberry        <- NAO mude, o instalador usa /home/raspberry
+  senha            a sua
+  Wi-Fi            SSID + senha da sua rede, pais BR   <- OBRIGATORIO, veja abaixo
+  fuso             America/Sao_Paulo
+  teclado          br
+
+Na aba Servicos: ative SSH. Se tiver uma chave publica, cole-a; senao, use
+senha.
+
+Grave e espere.
+
+
+PASSO 2 - Preparar o cartao (com ele ainda no PC)
+-------------------------------------------------
+Abra o PowerShell na pasta deste pacote e rode:
+
+    cd cartao
+    .\preparar_cartao.ps1
+
+Se o Windows reclamar de politica de execucao:
+
+    powershell -ExecutionPolicy Bypass -File .\preparar_cartao.ps1
+
+O script copia este pacote para a particao de boot do cartao e manda o Pi se
+instalar sozinho no primeiro boot. Ele se recusa a escrever em qualquer coisa
+que nao pareca um cartao de Raspberry Pi.
+
+
+PASSO 3 - Ejetar, por no Pi e ligar
+-----------------------------------
+Nao ha passo 4.
+
+   >>> O Pi VAI PARAR NUMA TELA DE LOGIN no meio do caminho. ISSO E NORMAL.
+   >>> E a instalacao rodando. NAO digite nada e NAO desligue.
+   >>> No fim ele reinicia sozinho e a tela abre no pendant.
+
+Num Pi 4 com rede boa levou cerca de 7 minutos do ligar ate a tela pronta.
+Num Pi 3, ou com internet lenta, conte mais.
+
+Do seu PC, na mesma rede:   http://pendant12.local:8080/pendant_dt
+
+
+POR QUE O WI-FI E OBRIGATORIO
+=============================
+O pendant fica em DUAS redes ao mesmo tempo:
+
+  eth0   10.26.10.12  fixo, sem gateway   -> o cabo que vai no robo
+  wlan0  DHCP da sua LAN                  -> SSH e o navegador do seu PC
+
+A rede do robo e uma ilha: nao tem roteador. Se voce nao configurar o Wi-Fi, o
+Pi sobe sem nenhum caminho de volta e so e acessivel com teclado e monitor
+ligados nele.
+
+
+TESTANDO COM O ROBO
+===================
+1. Ligue o UR5 e espere o PolyScope chegar na tela Move.
+2. Solte os freios (robo em RUNNING).
+3. Ligue o cabo de rede do robo no Pi e espere ~15 s.
+4. A pilula no topo da tela muda de SIMULACAO (cinza) para COMANDANDO (verde),
+   e o robo 3D salta para a pose real.
+
+O robo precisa estar em 10.26.10.20, com mascara 255.255.255.0
+(no teach pendant: Setup Robot -> Setup Network).
+
+
+NO PI 3 E DIFERENTE (e normal)
+==============================
+O Pi 3 nao tem WebGL2, entao o robo aparece como SILHUETA 2D em vez do 3D.
+O jog e a conexao com o robo sao identicos. Nao e defeito.
+
+O quiosque detecta o Pi 3 sozinho e acrescenta duas flags ao Chromium
+(--in-process-gpu --no-sandbox). Sem elas o Chromium nao sobe no Pi 3 e a tela
+fica preta com o cursor do mouse aparecendo. Ja vem resolvido.
+
+
+SE DER ERRADO
+=============
+O log da instalacao fica no Pi:
+
+    ssh raspberry@pendant12.local "tail -40 /var/log/pendant-instalar.log"
+
+Preso em SIMULACAO? No Pi, rode:  reconectar
+E leia:  tail -30 ~/diagnostico.log
+
+    cabo-OFF .................. problema no cabo ou conector
+    arp=REACHABLE ... ping-x ... IP do Pi alto demais, ou robo ainda bootando
+    ping-OK ... pronto=False .. robo conectado mas NAO esta em RUNNING
+
+Tela preta so com o cursor do mouse? O Chromium nao esta subindo. Veja:
+
+    ssh raspberry@pendant12.local "tail -20 ~/labwc.log"
+    ssh raspberry@pendant12.local "pgrep -cf quiosque.sh"   # tem que ser 1
+
+
+DOIS AVISOS
+===========
+- Todo cartao feito por esta receita sai com o MESMO IP (10.26.10.12). Dois
+  pendants nao podem ficar ligados ao mesmo tempo. Para um segundo, rode
+  .\preparar_cartao.ps1 -Numero 13 e use hostname pendant13 na engrenagem.
+
+- O numero do IP tem que ser BAIXO (.12, .13, .14...). O UR5 CB2 nao responde a
+  enderecos altos como .200/.201 por causa da mascara dele: o Pi ve o robo no
+  ARP, mas o ping e o dashboard nao voltam e a tela fica presa em SIMULACAO.
+
+
+MAIS DETALHES
+=============
+  README.md                  o que o instalador faz, as duas redes, modos
+  GUIA_REPLICAR_PENDANT.md   guia completo, incluindo como clonar cartoes

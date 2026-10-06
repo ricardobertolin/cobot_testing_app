@@ -1,0 +1,11 @@
+[Unit]
+Description=Diagnostico do pendant UR5 (grava ~/diagnostico.log)
+After=network.target
+[Service]
+Type=simple
+User=raspberry
+ExecStart=/home/raspberry/diagnostico.sh
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

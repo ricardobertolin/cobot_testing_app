@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Pendant kiosk - trava de layout e tarja de armado",
+  "version": "1.1",
+  "description": "Impede o refluxo de duas para uma coluna durante o jog em 800x480 e avisa quando o painel esta armado para comandar.",
+  "content_scripts": [{
+    "matches": ["http://localhost/*", "http://127.0.0.1/*"],
+    "css": ["fix.css"],
+    "js": ["armado.js"],
+    "run_at": "document_end"
+  }]
+}

@@ -1,0 +1,11 @@
+# Tudo aqui dentro roda no Raspberry Pi, entao tudo sai do git com LF, mesmo
+# em clone no Windows (onde core.autocrlf=true converteria para CRLF).
+#
+# Nao e preciosismo: um instalar.sh com CRLF morre no Pi com
+#     bash: ./instalar.sh: /bin/bash^M: bad interpreter
+# e uma unit do systemd com CRLF carrega o ^M junto do valor da diretiva.
+* text=auto eol=lf
+
+# Malhas do robo: binario, nao tocar.
+*.npz binary
+*.png binary

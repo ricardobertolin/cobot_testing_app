@@ -1,0 +1,4 @@
+# Configuracao do pendant UR5. Depois de mudar: sudo systemctl restart pendant-ur5
+ROBO_IP="10.26.10.20"
+# comandar = A PAGINA MOVE O ROBO | espelhar = so le | robo = so pilula | simulacao
+MODO="comandar"

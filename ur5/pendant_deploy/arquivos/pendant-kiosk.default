@@ -1,0 +1,10 @@
+# Pagina que o Chromium abre em tela cheia no boot.
+#
+#   /pendant_dt   tela + 3D na mesma pagina
+#   /pendant      so a tela Move do PolyScope
+#   /twin         so o robo em 3D
+URL="http://localhost:8080/pendant_dt"
+
+# O painel e 800x480 fisico. Reduzir a escala aumenta a area logica e
+# devolve o layout lado a lado. Ver a extensao de CSS para o porque.
+SCALE="0.75"

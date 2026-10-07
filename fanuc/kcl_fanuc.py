@@ -144,7 +144,7 @@ class KCL:
         return self.comando(f"SHOW VAR {nome}")
 
     def juntas(self):
-        """As seis juntas pela variavel de sistema, em graus."""
+        """As seis juntas pela variavel de sistema, em RADIANOS (nao graus)."""
         return self.variavel("$MOR_GRP[1].$CURRENT_ANG")
 
     def registrador(self, n):

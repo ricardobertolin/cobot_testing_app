@@ -17,8 +17,49 @@ sozinho se a ferramenta encostar.
 | `preparar_cad_step.py` | Gera o cache de malhas a partir de um STEP de montagem, articulando o braço até a pose zero. |
 | `monitor_fanuc.py` | Monitor ao vivo do robô real no terminal: deadman, E-stops, fence e as seis juntas, lidos por FTP. Somente leitura. |
 | `monitor_gui_fanuc.py` | O mesmo monitor em janela, com pílula de estado, LEDs e réguas de junta. |
-| `servidor_fanuc.py` | As telas acima servidas no navegador, para abrir no iPad. |
+| `servidor_fanuc.py` | As telas acima servidas no navegador, para abrir no iPad. Com `--comandar`, a página move o robô real, passo a passo, pelo PCPOSE. |
 | `web/` | As páginas: `pendant.html`, `twin.html` e `pendant_dt.html`. Sem framework e sem CDN. |
+| `pose_fanuc.py` | Manda uma pose de juntas (ou uma sequência) ao robô real pelo PCPOSE. |
+| `comando_fanuc.py` | A ponte entre a página e o `pose_fanuc.py`: jog vira passo. |
+| `scan_fanuc.py` | Mede quanto tempo o DI[10] precisa ficar OFF para o robô ver. |
+| `carregar_tp_fanuc.py` | Compila `.ls` com o maketp, sobe por FTP e carrega com KCL. Falta o maketp neste PC. |
+| `tp_pcpose.ls` | O programa PCPOSE, para digitar no pendant (ou compilar). |
+| `RELATORIO_COMANDO_PC.md` | Relatório do comando pelo PC: protocolo, problemas, medições, pendências. |
+
+## Comandar pelo PC (PCPOSE)
+
+Sem KAREL, Socket Messaging nem PC Interface, o único canal de escrita é o
+EtherNet/IP: o `R[1]` (classe CIP 0x6B, o único registrador exposto) e os
+DI[9..16] (assembly 151). O programa `PCPOSE` (`tp_pcpose.ls`) recebe as
+seis juntas uma a uma pelo `R[1]`, monta o `PR[50]` e move a 10% quando o
+PC liga o DI[9].
+
+```
+PC:   R[1] = (junta + 400) * 10, DI[10] ON      robô: PR[50,n], eco R[1] = 9000+n
+PC:   DI[10] OFF, espera 40 ms, próxima junta   (x6)
+PC:   confere PR[50] no posreg.va (FTP), DI[9] ON
+robô: J PR[50] 10% FINE, R[1] = 9100, volta ao LBL[1] e R[1] = 9000
+```
+
+Fatos que custaram teste:
+
+- o robô lê o INT16 do CIP **sem sinal** (-1700 chega como 63836): daí o +400;
+- o `$MOR_GRP[1].$CURRENT_ANG` do KCL está em **radianos**; o `curpos.dg` em graus;
+- o pendant não aceita registrador no índice de `PR[i,j]`: os seis blocos são desenrolados;
+- `R[2..31]` e `PR[1..27]` têm dados de outras pessoas; o PCPOSE usa `R[61]` e `PR[50]`;
+- o robô enxerga um OFF a partir de ~4 ms (`scan_fanuc.py`); o PC espera 40 ms.
+
+Medido: carga de uma pose 0,31 s, conferência 0,12 s, leitura da chegada 0,09 s.
+
+```
+python pose_fanuc.py --delta 1=5 --reset-antes
+python pose_fanuc.py --juntas 13 -20.3 -3.3 24.2 19.2 12.7
+python pose_fanuc.py --sequencia poses_gravadas.json --sem-leitura
+python servidor_fanuc.py --robo 10.26.10.102 --comandar
+```
+
+Em todos: T1, deadman + SHIFT seguros, `SELECT → PCPOSE`, `FWD`. Soltar o
+deadman é o que para o robô; o PC não interrompe um movimento já disparado.
 
 ## Ethernet
 

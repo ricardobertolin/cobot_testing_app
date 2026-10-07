@@ -69,6 +69,7 @@ import struct
 import sys
 import threading
 import time
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
@@ -85,6 +86,8 @@ PASTA_WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 PORTA_PADRAO = 8081
 PERIODO = 1.0 / 30.0      # s entre passos da simulacao e quadros do SSE
 PRAZO_JOG = 0.5           # s sem renovacao e o jog para sozinho
+# --comandar: graus por passo em cada degrau do override (comando_fanuc.py)
+PASSOS = [0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 10.0, 10.0, 10.0]
 
 # O servidor tambem publica em UDP, entao o twin3d_fanuc.py de desktop segue
 # a tela do navegador sem precisar saber que ela existe.
@@ -155,7 +158,7 @@ class Vigia:
         self.parar.set()
 
 
-def situacao(vigia, espelho=None):
+def situacao(vigia, espelho=None, comando=None):
     """
     O que a tela mostra sobre o enlace. Ver o cabecalho do Vigia para o que
     "conectado" significa deste lado.
@@ -163,6 +166,13 @@ def situacao(vigia, espelho=None):
     Em espelho o rotulo muda: nao e mais so "o controlador responde", e a
     pose na tela vem dele.
     """
+    if comando is not None:
+        return {"modo": "comando", "nivel": comando.nivel,
+                "rotulo": ("MOVENDO" if comando.ocupado else
+                           "FALHA" if comando.erro else "COMANDANDO O ROBO"),
+                "detalhe": f"{comando.situacao}. Passo pelo PCPOSE a 10%; "
+                           f"so roda com deadman + SHIFT no pendant."}
+
     if espelho is not None and espelho.recebeu:
         return {"modo": "espelho", "nivel": "ok", "rotulo": "SEGUINDO O ROBO",
                 "detalhe": f"pose lida de {espelho.ip} pelo curpos.dg, por "
@@ -263,8 +273,9 @@ class Estado:
     a thread da simulacao escreve, as threads de HTTP leem.
     """
 
-    def __init__(self, vigia=None, espelho=None):
+    def __init__(self, vigia=None, espelho=None, comando=None):
         self.espelho = espelho
+        self.comando = comando
         self.trava = threading.Lock()
         self.q = [0.0] * 6
         self.jog = None
@@ -285,6 +296,10 @@ class Estado:
 
     def comandar(self, pedido):
         acao = pedido.get("acao")
+
+        if self.comando is not None:
+            self._comandar_real(acao, pedido)
+            return
 
         # Em espelho a pose vem do robo. Aceitar jog aqui faria a tela
         # discordar do robo por um instante e voltar sozinha no quadro
@@ -320,6 +335,40 @@ class Estado:
             elif acao == "reset":
                 self.falha = False
                 self._avisar("reset")
+
+    def _comandar_real(self, acao, pedido):
+        """--comandar: jog vira passo no robo real (ver comando_fanuc.py)."""
+        c = self.comando
+        if acao == "jog":
+            if self.coord != "JOINT":
+                with self.trava:
+                    self._avisar("robo real: so jog em JOINT")
+                return
+            c.pedir_jog(int(pedido["eixo"]), int(pedido["sinal"]),
+                        PASSOS[self.indice_override])
+        elif acao == "parar":
+            c.soltar()
+        elif acao == "override":
+            with self.trava:
+                self.indice_override = max(0, min(
+                    len(pend.OVERRIDES) - 1,
+                    self.indice_override + int(pedido.get("passo", 0))))
+                self._avisar(f"passo: {PASSOS[self.indice_override]:g} grau")
+        elif acao == "coord":
+            with self.trava:
+                self._avisar("robo real: so JOINT (sem cinematica inversa "
+                             "no caminho do PCPOSE)")
+        elif acao == "reset":
+            c.reset()
+        elif acao and acao.startswith("pose_"):
+            nome = acao[len("pose_"):]
+            if nome in pend.POSES:
+                c.pedir_pose(nome, pend.POSES[nome])
+
+    def avisar_externo(self, texto, segundos=4.0):
+        """Para o comando_fanuc, que roda noutra thread."""
+        with self.trava:
+            self._avisar(texto, segundos)
 
     def _avisar(self, texto, segundos=4.0):
         self.mensagem = texto
@@ -371,6 +420,11 @@ class Estado:
             rotulo_override = pend.OVERRIDES[self.indice_override][0]
             movendo = self.jog is not None
             falha = self.falha
+            if self.comando is not None:
+                movendo = self.comando.ocupado
+                falha = self.comando.erro is not None
+                rotulo_override = (f"{rotulo_override} = "
+                                   f"{PASSOS[self.indice_override]:g} grau")
             mensagem = self.mensagem if time.monotonic() < self.mensagem_ate else ""
 
         corpos = mod.transformadas(q)
@@ -415,7 +469,7 @@ class Estado:
             "mensagem": mensagem,
             "sigma": round(menor, 4),
             "avisos": mod.dentro_dos_limites(graus),
-            "robo": situacao(self.vigia, self.espelho),
+            "robo": situacao(self.vigia, self.espelho, self.comando),
         }
 
 
@@ -461,8 +515,23 @@ def empacotar_malhas():
     return blobs
 
 
-def configuracao(espelho=False):
+def configuracao(espelho=False, comanda=False):
     """Tudo que a pagina precisa saber sobre este robo."""
+    acoes = [{"id": "reset", "texto": "RESET", "cor": "#d8c27a"}]
+    if comanda:
+        # Pose nomeada no robo real anda ate o fim sozinha: vira acao com
+        # confirmacao, como o INICIO do UR5, em vez de botao de pose.
+        acoes += [{"id": f"pose_{nome}", "texto": nome,
+                   "confirmar": f"Mover o robo REAL para {nome} "
+                                f"{pend.POSES[nome]} a 10%? Deadman + "
+                                f"SHIFT no pendant."}
+                  for nome in pend.POSES]
+    aviso = ""
+    if comanda:
+        aviso = ("ESTA TELA MOVE O ROBO REAL - cada toque e um passo a 10%; "
+                 "para parar, solte o deadman")
+    elif espelho:
+        aviso = "pose lida do robo real; a pagina nao move nada"
     return {
         "robo": "LR Mate 200iC",
         "controlador": "R-30iA Mate",
@@ -481,10 +550,11 @@ def configuracao(espelho=False):
         "titulo_juntas": "POSITION",
         "titulo_cartesiano": "WORLD (UTOOL 0, UFRAME 0)",
         "coordenadas": {"rotulo": "COORD",
-                        "valores": ["JOINT", "WORLD", "TOOL"]},
+                        "valores": (["JOINT"] if comanda
+                                    else ["JOINT", "WORLD", "TOOL"])},
         "velocidade": {"tipo": "escada", "rotulo": "OVERRIDE",
                        "valores": [nome for nome, _ in pend.OVERRIDES]},
-        "poses": list(pend.POSES),
+        "poses": [] if comanda else list(pend.POSES),
         # Seis eixos so: no iPendant as mesmas teclas movem as juntas ou o
         # cartesiano conforme o COORD, ao contrario do PolyScope, que tem
         # doze. Quem decide qual grupo aceita toque e a pagina, pelo coord
@@ -492,10 +562,9 @@ def configuracao(espelho=False):
         "jog_eixos": list(range(6)),
         # O RESET do pendant, que limpa o FAULT. Nao e pose nem jog, entao
         # entra como acao, no mesmo campo que o UR5 usa para PARAR e INICIO.
-        "acoes": [{"id": "reset", "texto": "RESET", "cor": "#d8c27a"}],
-        "aviso": ("pose lida do robo real; a pagina nao move nada"
-                  if espelho else ""),
-        "comanda": False,
+        "acoes": acoes,
+        "aviso": aviso,
+        "comanda": comanda,
         "espelho": espelho,
         "elos": [{"nome": nome, "cor": list(cor)}
                  for nome, _, cor in mod.ELOS],
@@ -630,6 +699,17 @@ class Manipulador(BaseHTTPRequestHandler):
             pass
 
 
+class Servidor(ThreadingHTTPServer):
+    """O ThreadingHTTPServer, sem traceback quando o navegador fecha a aba."""
+
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], (ConnectionAbortedError,
+                                          ConnectionResetError,
+                                          BrokenPipeError)):
+            return                  # aba fechada no meio de um keep-alive
+        super().handle_error(request, client_address)
+
+
 INDICE = """<!doctype html>
 <meta charset="utf-8">
 <title>LR Mate 200iC</title>
@@ -664,6 +744,13 @@ def main():
     analisador.add_argument("--espelhar", action="store_true",
                             help="a pose vem do robo real, lida do "
                                  "curpos.dg por FTP. Exige --robo.")
+    analisador.add_argument("--sem-navegador", action="store_true",
+                            help="nao abrir o /pendant_dt no navegador "
+                                 "desta maquina (ex.: so o iPad vai usar)")
+    analisador.add_argument("--comandar", action="store_true",
+                            help="a pagina MOVE o robo real, passo a passo, "
+                                 "pelo PCPOSE (pose_fanuc.py). Exige --robo; "
+                                 "liga o --espelhar.")
     opcoes = analisador.parse_args()
 
     if not mod.cache_existe():
@@ -673,6 +760,12 @@ def main():
         except FileNotFoundError as erro:
             print(erro)
             return 1
+
+    if opcoes.comandar:
+        if not opcoes.robo:
+            print("--comandar precisa de --robo IP")
+            return 1
+        opcoes.espelhar = True
 
     if opcoes.espelhar and not opcoes.robo:
         print("--espelhar precisa de --robo IP: e de la que a pose vem")
@@ -693,11 +786,18 @@ def main():
         else:
             print("espelho: lendo a pose real de %s" % opcoes.robo)
 
-    servidor = ThreadingHTTPServer((opcoes.host, opcoes.porta), Manipulador)
+    servidor = Servidor((opcoes.host, opcoes.porta), Manipulador)
     servidor.daemon_threads = True
     servidor.estado = Estado(vigia, espelho)
+    comando = None
+    if opcoes.comandar:
+        import comando_fanuc
+        comando = comando_fanuc.ComandoFanuc(opcoes.robo,
+                                             servidor.estado.avisar_externo)
+        servidor.estado.comando = comando
+        servidor.estado.indice_override = 3     # 2 graus por passo
     servidor.malhas = empacotar_malhas()
-    servidor.configuracao = configuracao(bool(espelho))
+    servidor.configuracao = configuracao(bool(espelho), comando is not None)
     servidor.parar = threading.Event()
 
     threading.Thread(target=laco, args=(servidor.estado, servidor.parar),
@@ -709,7 +809,17 @@ def main():
         print(f"  http://{endereco}:{opcoes.porta}/pendant_dt   (tela + 3D)")
         print(f"  http://{endereco}:{opcoes.porta}/pendant")
         print(f"  http://{endereco}:{opcoes.porta}/twin")
+    if comando is not None:
+        print("  *** MODO --comandar: A PAGINA MOVE O ROBO DE VERDADE ***")
+        print("  PCPOSE: SELECT, FWD, deadman + SHIFT seguros no pendant")
     print("ctrl+c para encerrar")
+
+    if not opcoes.sem_navegador:
+        # Abre depois que o serve_forever ja esta atendendo, senao a primeira
+        # requisicao do navegador pode chegar antes e falhar.
+        url = (f"http://{enderecos_locais(opcoes.host)[0]}:{opcoes.porta}"
+               f"/pendant_dt")
+        threading.Timer(0.8, webbrowser.open, args=(url,)).start()
 
     try:
         servidor.serve_forever()
@@ -717,6 +827,8 @@ def main():
         pass
     finally:
         servidor.parar.set()
+        if comando is not None:
+            comando.fechar()                 # zera os DI
         if vigia is not None:
             vigia.fechar()
         servidor.server_close()
